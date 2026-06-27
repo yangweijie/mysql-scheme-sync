@@ -1,0 +1,71 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "63d65358ceb8dfcec7b525902d3dfe64",
+    "packages": [
+        {
+            "name": "helgesverre/libui",
+            "version": "v0.7.1",
+            "dist": {
+                "type": "zip",
+                "url": "https://mirrors.cloud.tencent.com/repository/composer/helgesverre/libui/v0.7.1/helgesverre-libui-v0.7.1.zip",
+                "reference": "0fb77374d01b3d2423b9018225cdfe049d28a538",
+                "shasum": ""
+            },
+            "require": {
+                "ext-ffi": "*",
+                "php": ">=8.5"
+            },
+            "require-dev": {
+                "carthage-software/mago": "^1.30",
+                "phpstan/phpstan": "^2.0",
+                "phpunit/phpunit": "^13.2"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Libui\\": "src/"
+                }
+            },
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Helge Sverre",
+                    "email": "helge.sverre@gmail.com",
+                    "homepage": "https://helgesver.re",
+                    "role": "Developer"
+                }
+            ],
+            "description": "Native desktop GUI for PHP 8.5+ via libui-ng and FFI.",
+            "keywords": [
+                "cross-platform",
+                "desktop",
+                "ffi",
+                "gui",
+                "libui",
+                "native"
+            ],
+            "support": {
+                "issues": "https://github.com/HelgeSverre/libui/issues",
+                "source": "https://github.com/HelgeSverre/libui/tree/v0.7.1"
+            },
+            "time": "2026-06-23T13:19:15+00:00"
+        }
+    ],
+    "packages-dev": [],
+    "aliases": [],
+    "minimum-stability": "stable",
+    "stability-flags": {},
+    "prefer-stable": false,
+    "prefer-lowest": false,
+    "platform": {
+        "php": ">=8.5"
+    },
+    "platform-dev": {},
+    "plugin-api-version": "2.6.0"
+}
