@@ -5,6 +5,7 @@ namespace MySqlSchemaSync\Gui;
 
 use Libui\Box;
 use Libui\Button;
+use Libui\Combobox;
 use Libui\Dialogs;
 use Libui\Entry;
 use Libui\Form;
@@ -157,19 +158,15 @@ class ConnectionWindow
 
     private function onLoad(): void
     {
-        $items = [];
-        foreach ($this->store->list() as $c) {
-            $items[] = "{$c->name} ({$c->host})";
-        }
-        if (!$items) {
+        $connections = array_values($this->store->list());
+        if (!$connections) {
             $this->status->setText('没有已保存的连接');
             return;
         }
-        // Use a simple input dialog emulation
-        $dlg = new Window('选择连接', 320, 120);
+        $dlg = new Window('选择连接', 380, 160);
         $dlg->setMargined(true);
         $dlg->onClosing(function () {
-            return true; // 独立关闭，不影响主窗口
+            return true;
         });
         if ($this->window) {
             [$px, $py] = $this->window->getPosition();
@@ -179,30 +176,37 @@ class ConnectionWindow
         }
         $box = new Box();
         $box->setPadded(true);
-        $entry = new Entry();
-        $entry->setText($items[0]);
-        $box->append(new Label('可用连接：' . implode(', ', array_slice($items, 0, 3))), false);
-        $box->append($entry, false);
+
+        $box->append(new Label('选择一个连接配置：'), false);
+
+        $combo = new Combobox();
+        $connList = [];
+        foreach ($connections as $c) {
+            $label = "{$c->name} ({$c->host}:{$c->port}/{$c->database})";
+            $combo->append($label);
+            $connList[] = $c;
+        }
+        $combo->setSelected(0);
+        $box->append($combo, false);
+
         $btn = new Button('加载');
-        $btn->onClicked(function () use ($entry, $dlg) {
-            $text = $entry->text();
-            foreach ($this->store->list() as $c) {
-                if (str_starts_with($text, $c->name)) {
-                    $this->form->setValues([
-                        '连接名称'  => $c->name,
-                        '主机'      => $c->host,
-                        '端口'      => (string)$c->port,
-                        '用户名'    => $c->user,
-                        '密码'      => $c->password,
-                        '默认数据库'=> $c->database,
-                    ]);
-                    $this->status->setText("已加载：{$c->name}");
-                    $dlg->show();
-                    return;
-                }
-            }
+        $btn->onClicked(function () use ($combo, $connList, $dlg) {
+            $idx = $combo->selected();
+            if ($idx < 0 || !isset($connList[$idx])) return;
+            $c = $connList[$idx];
+            $this->form->setValues([
+                '连接名称'  => $c->name,
+                '主机'      => $c->host,
+                '端口'      => (string)$c->port,
+                '用户名'    => $c->user,
+                '密码'      => $c->password,
+                '默认数据库'=> $c->database,
+            ]);
+            $this->status->setText("已加载：{$c->name}");
+            $dlg->hide();
         });
         $box->append($btn, false);
+
         $dlg->setChild($box);
         $dlg->show();
     }

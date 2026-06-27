@@ -9,6 +9,8 @@ use Libui\Combobox;
 use Libui\Entry;
 use Libui\Label;
 use Libui\MultilineEntry;
+use Libui\Table;
+use Libui\TableModel;
 use Libui\Window;
 use MySqlSchemaSync\Config\ConfigStore;
 use MySqlSchemaSync\Config\Connection;
@@ -28,8 +30,14 @@ class MainWindow
     private Combobox $tgtCombo;
     private Entry $filterEntry;
     private Label $statusLabel;
-    private MultilineEntry $resultBox;
     private Button $generateBtn;
+
+    /** A dedicated box in the layout that gets replaced with results or placeholder. */
+    private Box $resultArea;
+
+    /** Current diff table state */
+    private ?DiffTableModelDelegate $diffDelegate = null;
+    private ?Label $summaryLabel = null;
 
     public function __construct(ConfigStore $store)
     {
@@ -38,7 +46,7 @@ class MainWindow
 
     public function run(): void
     {
-        $this->window = new Window('MySQL SchemaSync (PHP + libui)', 900, 650);
+        $this->window = new Window('MySQL SchemaSync (PHP + libui)', 1000, 700);
         $this->window->setMargined(true)->setResizeable(true);
 
         $root = new Box();
@@ -76,23 +84,21 @@ class MainWindow
         $filterRow->append($this->filterEntry, true);
         $root->append($filterRow, false);
 
-        // Results
-        $this->resultBox = new MultilineEntry();
-        $this->resultBox->setReadOnly(true);
-        $this->resultBox->setText("请选择源库和目标库，然后点击「开始比对」。\n\n说明：源库 = 新结构（如测试库），目标库 = 要同步到的旧结构（如生产库）。");
-        $root->append($this->resultBox, true);
+        // Result area — dedicated box, contents are swapped on compare
+        $this->resultArea = new Box();
+        $this->resultArea->setPadded(true);
+        $placeholder = new Label("请选择源库和目标库，然后点击「开始比对」。\n说明：源库 = 新结构（如测试库），目标库 = 要同步到的旧结构（如生产库）。");
+        $this->resultArea->appendStretchy($placeholder);
+        $root->appendStretchy($this->resultArea);
 
         // Footer
         $footer = Box::horizontal();
         $footer->setPadded(true);
         $this->statusLabel = new Label('就绪');
-        $this->generateBtn = new Button('📋 生成迁移 SQL');
+        $this->generateBtn = new Button('📋 生成迁移 SQL (0)');
         $this->generateBtn->onClicked($this->onGenerateSql(...));
-        $copyBtn = new Button('📋 复制结果');
-        $copyBtn->onClicked($this->onCopyResults(...));
 
         $footer->append($this->statusLabel, true);
-        $footer->append($copyBtn, false);
         $footer->append($this->generateBtn, false);
 
         $root->append($footer, false);
@@ -106,8 +112,9 @@ class MainWindow
         $this->srcCombo->clear();
         $this->tgtCombo->clear();
         foreach ($this->store->list() as $conn) {
-            $this->srcCombo->append("{$conn->name} ({$conn->host}:{$conn->port}/{$conn->database})");
-            $this->tgtCombo->append("{$conn->name} ({$conn->host}:{$conn->port}/{$conn->database})");
+            $label = "{$conn->name} ({$conn->host}:{$conn->port}/{$conn->database})";
+            $this->srcCombo->append($label);
+            $this->tgtCombo->append($label);
         }
         if (count($this->store->list()) > 0) {
             $this->srcCombo->setSelected(0);
@@ -137,11 +144,11 @@ class MainWindow
         $tgt = $this->getSelectedConnection($this->tgtCombo);
 
         if (!$src || !$tgt) {
-            $this->resultBox->setText("❌ 请先配置并选择源库和目标库。");
+            $this->showPlaceholder("❌ 请先配置并选择源库和目标库。");
             return;
         }
         if ($src->id === $tgt->id) {
-            $this->resultBox->setText("❌ 源库和目标库不能相同。");
+            $this->showPlaceholder("❌ 源库和目标库不能相同。");
             return;
         }
 
@@ -156,88 +163,197 @@ class MainWindow
 
         if ($this->lastDiff->error) {
             $this->statusLabel->setText('比对失败');
-            $this->resultBox->setText("❌ 错误：{$this->lastDiff->error}");
+            $this->showPlaceholder("❌ 错误：{$this->lastDiff->error}");
             return;
         }
 
-        $lines = [];
-        $lines[] = "比对结果：{$src->name} → {$tgt->name}";
-        $lines[] = "源库版本: {$sourceSchema->version} | 目标库版本: {$targetSchema->version}";
-        $lines[] = "总差异数: {$this->lastDiff->total()}";
-        $lines[] = str_repeat('-', 60);
+        $this->buildDiffTable($src, $tgt, $sourceSchema);
+    }
 
-        $sections = [
-            ['新增表', $this->lastDiff->newTables, '+'],
-            ['删除表', $this->lastDiff->removedTables, '-'],
-            ['变更表', $this->lastDiff->changedTables, '~'],
-            ['新增索引', $this->lastDiff->newIndexes, '+'],
-            ['删除索引', $this->lastDiff->removedIndexes, '-'],
-            ['新增外键', $this->lastDiff->newForeignKeys, '+'],
-            ['删除外键', $this->lastDiff->removedForeignKeys, '-'],
-            ['新增触发器', $this->lastDiff->newTriggers, '+'],
-            ['删除触发器', $this->lastDiff->removedTriggers, '-'],
-            ['新增视图', $this->lastDiff->newViews, '+'],
-            ['删除视图', $this->lastDiff->removedViews, '-'],
-            ['新增存储过程', $this->lastDiff->newProcedures, '+'],
-            ['删除存储过程', $this->lastDiff->removedProcedures, '-'],
-            ['新增函数', $this->lastDiff->newFunctions, '+'],
-            ['删除函数', $this->lastDiff->removedFunctions, '-'],
-            ['新增事件', $this->lastDiff->newEvents, '+'],
-            ['删除事件', $this->lastDiff->removedEvents, '-'],
-        ];
+    /** Clear the result area and rebuild with table/toolbar. */
+    private function buildDiffTable(Connection $src, Connection $tgt, Schema $sourceSchema): void
+    {
+        // Clear previous result area children
+        $this->clearResultArea();
 
-        foreach ($sections as [$title, $items, $icon]) {
-            if (!$items) continue;
-            $lines[] = "\n[$title] (" . count($items) . ")";
-            foreach ($items as $item) {
-                $name = $item['name'];
-                $risk = $item['risk'];
-                $extra = '';
-                if (isset($item['table'])) $extra = " on {$item['table']}";
-                $lines[] = "  $icon $name$extra [$risk]";
-                if (isset($item['changes'])) {
-                    foreach ($item['changes'] as $c) {
-                        $lines[] = "      · {$c['kind']}: {$c['column']} [{$c['risk']}]";
-                    }
-                }
+        // Summary line
+        $summaryText = "比对结果：{$src->name} → {$tgt->name}  |  源库: {$sourceSchema->version}  |  目标库: {$this->targetSchema->version}";
+        $this->summaryLabel = new Label($summaryText);
+        $this->resultArea->append($this->summaryLabel, false);
+
+        // Toolbar
+        $toolBar = Box::horizontal();
+        $toolBar->setPadded(true);
+
+        $selectAllBtn = new Button('☑ 全选');
+        $selectAllBtn->onClicked(fn() => $this->onSelectAll(true));
+
+        $deselectAllBtn = new Button('☐ 取消');
+        $deselectAllBtn->onClicked(fn() => $this->onSelectAll(false));
+
+        $safeOnlyBtn = new Button('🟢 仅 SAFE');
+        $safeOnlyBtn->onClicked(fn() => $this->onSelectByRisk('SAFE'));
+
+        $warnOnlyBtn = new Button('🟡 仅 WARN');
+        $warnOnlyBtn->onClicked(fn() => $this->onSelectByRisk('WARN'));
+
+        $highOnlyBtn = new Button('🔴 仅 HIGH');
+        $highOnlyBtn->onClicked(fn() => $this->onSelectByRisk('HIGH'));
+
+        $toolBar->append($selectAllBtn, false);
+        $toolBar->append($deselectAllBtn, false);
+        $toolBar->append($safeOnlyBtn, false);
+        $toolBar->append($warnOnlyBtn, false);
+        $toolBar->append($highOnlyBtn, false);
+
+        $this->resultArea->append($toolBar, false);
+
+        // Delegate + Table
+        $delegate = new DiffTableModelDelegate();
+        $delegate->loadDiffs(
+            $this->lastDiff->newTables,
+            $this->lastDiff->changedTables,
+            $this->lastDiff->removedTables,
+            $this->lastDiff->newIndexes,
+            $this->lastDiff->removedIndexes,
+            $this->lastDiff->newForeignKeys,
+            $this->lastDiff->removedForeignKeys,
+            $this->lastDiff->newTriggers,
+            $this->lastDiff->removedTriggers,
+            $this->lastDiff->newViews,
+            $this->lastDiff->removedViews,
+            $this->lastDiff->newProcedures,
+            $this->lastDiff->removedProcedures,
+            $this->lastDiff->newFunctions,
+            $this->lastDiff->removedFunctions,
+            $this->lastDiff->newEvents,
+            $this->lastDiff->removedEvents,
+        );
+
+        $model = new TableModel($delegate);
+        $delegate->setModel($model);
+
+        $this->diffDelegate = $delegate;
+
+        // Button text update on checkbox toggle
+        $delegate->onToggle(function () use ($delegate) {
+            $sel = $delegate->selectedCount();
+            $total = $delegate->totalCount();
+            $this->generateBtn->setText(
+                $sel === $total
+                    ? "📋 生成迁移 SQL ({$sel})"
+                    : "📋 生成迁移 SQL（已选 {$sel}/{$total}）"
+            );
+        });
+
+        $table = Table::fromModel($model);
+        $table->appendCheckboxColumn('✓', 0, 0);
+        $table->appendTextColumn('类型', 1);
+        $table->appendTextColumn('名称', 2);
+        $table->appendTextColumn('风险', 3);
+        $table->appendTextColumn('详情', 4);
+        $table->setColumnWidth(0, 40);
+        $table->setColumnWidth(1, 120);
+        $table->setColumnWidth(2, 250);
+        $table->setColumnWidth(3, 80);
+        $table->setColumnWidth(4, 300);
+
+        // Click anywhere on a row toggles the checkbox
+        $table->onRowClicked(function (Table $t, int $row) use ($delegate) {
+            $delegate->toggleRowChecked($row);
+            $this->updateGenerateBtnText();
+        });
+        $this->resultArea->appendStretchy($table);
+
+        // Update status
+        $total = $delegate->totalCount();
+        $this->statusLabel->setText("比对完成：{$total} 处差异");
+        $this->generateBtn->setText("📋 生成迁移 SQL ({$total})");
+    }
+
+    private function clearResultArea(): void
+    {
+        while ($this->resultArea->numChildren() > 0) {
+            $this->resultArea->delete(0);
+        }
+    }
+
+    private function showPlaceholder(string $text): void
+    {
+        $this->clearResultArea();
+        $label = new Label($text);
+        $this->resultArea->appendStretchy($label);
+    }
+
+    private function onSelectAll(bool $checked): void
+    {
+        if (!$this->diffDelegate) return;
+        $this->diffDelegate->setAllChecked($checked);
+        $this->updateGenerateBtnText();
+    }
+
+    private function onSelectByRisk(string $risk): void
+    {
+        if (!$this->diffDelegate) return;
+        $this->diffDelegate->setCheckedByRisk($risk, true);
+        foreach (['SAFE', 'WARN', 'HIGH'] as $r) {
+            if ($r !== $risk) {
+                $this->diffDelegate->setCheckedByRisk($r, false);
             }
         }
+        $this->updateGenerateBtnText();
+    }
 
-        $this->resultBox->setText(implode("\n", $lines));
-        $this->statusLabel->setText("比对完成：{$this->lastDiff->total()} 处差异");
+    private function updateGenerateBtnText(): void
+    {
+        if (!$this->diffDelegate) return;
+        $sel = $this->diffDelegate->selectedCount();
+        $total = $this->diffDelegate->totalCount();
+        $this->generateBtn->setText(
+            $sel === $total
+                ? "📋 生成迁移 SQL ({$sel})"
+                : "📋 生成迁移 SQL（已选 {$sel}/{$total}）"
+        );
     }
 
     private function onGenerateSql(): void
     {
         if (!$this->lastDiff || $this->lastDiff->total() === 0) {
-            $this->resultBox->setText($this->resultBox->text() . "\n\n⚠ 没有可生成的差异。");
+            $this->statusLabel->setText('⚠ 没有可生成的差异');
             return;
         }
+
+        $selected = $this->diffDelegate ? $this->diffDelegate->selectedRows() : [];
+        if ($this->diffDelegate && count($selected) === 0) {
+            $this->statusLabel->setText('⚠ 请先勾选需要迁移的差异项');
+            return;
+        }
+
+        $filtered = $this->buildFilteredDiff($selected);
+
         $src = $this->getSelectedConnection($this->srcCombo);
         $tgt = $this->getSelectedConnection($this->tgtCombo);
         $gen = new Generator($src, $tgt, $this->sourceSchema, $this->targetSchema);
-        $sql = $gen->generate($this->lastDiff);
+        $sql = $gen->generate($filtered);
 
         $win = new Window('生成的迁移 SQL', 800, 500);
         $win->setMargined(true);
-        $win->onClosing(function () {
-            return true; // 独立关闭，不影响主窗口
-        });
+        $win->onClosing(fn() => true);
+
         $box = new Box();
         $box->setPadded(true);
 
         $text = new MultilineEntry();
         $text->setReadOnly(true);
         $text->setText($sql);
-        $box->append($text, true);
+        $box->appendStretchy($text);
 
         $btnRow = Box::horizontal();
         $btnRow->setPadded(true);
         $copy = new Button('📋 复制到剪贴板');
         $copy->onClicked(function () use ($text, $win) {
             if (function_exists('shell_exec')) {
-                $escaped = str_replace("'", "'\\''", $text->text());
-                shell_exec("echo '" . $escaped . "' | pbcopy");
+                shell_exec("echo '" . str_replace("'", "'\\''", $text->text()) . "' | pbcopy");
             }
             $win->dialogs()->msgBox('已复制', 'SQL 已复制到剪贴板。');
         });
@@ -263,14 +379,39 @@ class MainWindow
         $win->show();
     }
 
-    private function onCopyResults(): void
+    private function buildFilteredDiff(array $selected): DiffResult
     {
-        $text = $this->resultBox->text();
-        if (function_exists('shell_exec')) {
-            $escaped = str_replace("'", "'\\''", $text);
-            shell_exec("echo '" . $escaped . "' | pbcopy");
+        $d = new DiffResult();
+        if (!$this->lastDiff) return $d;
+
+        $selectedMap = [];
+        foreach ($selected as $s) {
+            $selectedMap[$s['type'] . "\x00" . $s['name']] = true;
         }
-        $this->window->dialogs()->msgBox('已复制', '比对结果已复制到剪贴板。');
+
+        $filter = function (string $type, array $list) use ($selectedMap): array {
+            return array_values(array_filter($list, fn($item) => isset($selectedMap[$type . "\x00" . ($item['name'] ?? '')])));
+        };
+
+        $d->newTables               = $filter('新增表',       $this->lastDiff->newTables);
+        $d->changedTables           = $filter('变更表',       $this->lastDiff->changedTables);
+        $d->removedTables           = $filter('删除表',       $this->lastDiff->removedTables);
+        $d->newIndexes              = $filter('新增索引',     $this->lastDiff->newIndexes);
+        $d->removedIndexes          = $filter('删除索引',     $this->lastDiff->removedIndexes);
+        $d->newForeignKeys          = $filter('新增外键',     $this->lastDiff->newForeignKeys);
+        $d->removedForeignKeys      = $filter('删除外键',     $this->lastDiff->removedForeignKeys);
+        $d->newTriggers             = $filter('新增触发器',   $this->lastDiff->newTriggers);
+        $d->removedTriggers         = $filter('删除触发器',   $this->lastDiff->removedTriggers);
+        $d->newViews                = $filter('新增视图',     $this->lastDiff->newViews);
+        $d->removedViews            = $filter('删除视图',     $this->lastDiff->removedViews);
+        $d->newProcedures           = $filter('新增存储过程', $this->lastDiff->newProcedures);
+        $d->removedProcedures       = $filter('删除存储过程', $this->lastDiff->removedProcedures);
+        $d->newFunctions            = $filter('新增函数',     $this->lastDiff->newFunctions);
+        $d->removedFunctions        = $filter('删除函数',     $this->lastDiff->removedFunctions);
+        $d->newEvents               = $filter('新增事件',     $this->lastDiff->newEvents);
+        $d->removedEvents           = $filter('删除事件',     $this->lastDiff->removedEvents);
+
+        return $d;
     }
 
     private function onManageConnections(): void
