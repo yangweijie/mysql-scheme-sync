@@ -39,9 +39,13 @@ mysql-schema-sync.php
 | 配置 JSON 导入/导出 | ✅ |
 | 表/列/索引/外键/触发器/视图/SP/函数/事件对比 | ✅ |
 | glob 模式排除备份/临时表 | ✅ |
-| 生成迁移 SQL（ALTER / CREATE / DROP） | ✅ |
-| 风险等级标注（SAFE / WARN / HIGH） | ✅ |
+| 生成迁移 SQL（ALTER / CREATE / DROP，完整列定义） | ✅ |
+| 风险等级标注（SAFE / WARN / HIGH，颜色标记） | ✅ |
 | SQL 一键复制 / 保存为 .sql | ✅ |
+| 可勾选差异表格（按行点选/全选/按风险筛选） | ✅ |
+| 源/目标库互换 | ✅ |
+| 已选差异计数（已选 N/M） | ✅ |
+| 分类摘要（新增 N 表 / 变更 N 表 / 删除 N 表） | ✅ |
 
 ## 项目结构
 
@@ -51,16 +55,11 @@ mysql-schema-sync-php/
 ├── src/
 │   ├── Config/                    # 加密连接配置
 │   ├── Diff/                      # INFORMATION_SCHEMA 读取 + 差异计算
-│   ├── SqlGen/                    # 迁移 SQL 生成
-│   └── Gui/                       # libui 界面层
+│   ├── SqlGen/                    # 迁移 SQL 生成（基于源库完整元数据）
+│   └── Gui/                       # libui 界面层（可勾选 Table 表格）
 ├── composer.json
 └── README.md
 ```
-
-## 已知限制
-
-- 当前 SQL 生成器对 `CREATE TABLE` 完整列定义使用占位符，需后续根据源库列元数据补全。
-- 选择性差异生成（勾选部分变更）在 libui 简单静态表格中实现较复杂，后续可用 TableModelDelegate 实现。
 
 ## 技术栈
 
