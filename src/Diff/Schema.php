@@ -37,7 +37,7 @@ class Schema
             $pdo = new PDO($dsn, $conn->user, $conn->password, [
                 PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-                PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4",
+                \PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4",
             ]);
             $schema->version = $pdo->query('SELECT VERSION()')->fetchColumn();
             $schema->fetchTables($pdo, $conn->database);

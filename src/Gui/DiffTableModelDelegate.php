@@ -15,8 +15,9 @@ use Libui\TableModelDelegate;
  *   0 – Checkbox (bool, editable)
  *   1 – Type      (string: "新增表" / "变更表" / "删除表" / …)
  *   2 – Name      (string)
- *   3 – Risk      (string: SAFE / WARN / HIGH)
+ *   3 – Risk      (string: SAFE / WARN / HIGH) — coloured via col 5
  *   4 – Details   (string)
+ *   5 – RiskColor (Color, referenced by column 3 for text colour)
  */
 class DiffTableModelDelegate extends TableModelDelegate
 {
@@ -27,6 +28,10 @@ class DiffTableModelDelegate extends TableModelDelegate
     private $onToggle = null;
 
     private ?TableModel $model = null;
+
+    private static ?Color $riskColorSafe = null;
+    private static ?Color $riskColorWarn = null;
+    private static ?Color $riskColorHigh = null;
 
     public function setModel(TableModel $m): void
     {
@@ -77,7 +82,7 @@ class DiffTableModelDelegate extends TableModelDelegate
         foreach ($sections as $sec) {
             foreach ($sec['items'] as $item) {
                 $this->rows[] = [
-                    'checked' => true,  // default checked
+                    'checked' => true,
                     'type'    => $sec['type'],
                     'name'    => $item['name'] ?? '',
                     'risk'    => $item['risk'] ?? 'SAFE',
@@ -87,7 +92,6 @@ class DiffTableModelDelegate extends TableModelDelegate
         }
     }
 
-    /** @return list<array{type:string, name:string, risk:string}> */
     public function selectedRows(): array
     {
         $sel = [];
@@ -99,17 +103,12 @@ class DiffTableModelDelegate extends TableModelDelegate
         return $sel;
     }
 
-    public function totalCount(): int
-    {
-        return count($this->rows);
-    }
+    public function totalCount(): int { return count($this->rows); }
 
     public function selectedCount(): int
     {
         $c = 0;
-        foreach ($this->rows as $r) {
-            if ($r['checked']) $c++;
-        }
+        foreach ($this->rows as $r) { if ($r['checked']) $c++; }
         return $c;
     }
 
@@ -131,10 +130,7 @@ class DiffTableModelDelegate extends TableModelDelegate
         }
     }
 
-    public function onToggle(callable $cb): void
-    {
-        $this->onToggle = $cb;
-    }
+    public function onToggle(callable $cb): void { $this->onToggle = $cb; }
 
     public function isRowChecked(int $row): bool
     {
@@ -151,19 +147,33 @@ class DiffTableModelDelegate extends TableModelDelegate
 
     // --- TableModelDelegate interface ---
 
-    public function numColumns(): int { return 5; }
+    public function numColumns(): int { return 6; }
 
     public function numRows(): int { return count($this->rows); }
 
     public function columnType(int $column): TableValueType
     {
-        return $column === 0 ? TableValueType::Int : TableValueType::String;
+        return match ($column) {
+            0 => TableValueType::Int,
+            5 => TableValueType::Color,
+            default => TableValueType::String,
+        };
     }
 
     public function cellValue(int $row, int $column): string|int|bool|Color|null
     {
         if (!isset($this->rows[$row])) return '';
         $d = $this->rows[$row];
+
+        if ($column === 5) {
+            return match ($d['risk']) {
+                'SAFE' => self::colorSafe(),
+                'WARN' => self::colorWarn(),
+                'HIGH' => self::colorHigh(),
+                default => null,
+            };
+        }
+
         return match ($column) {
             0 => $d['checked'],
             1 => $d['type'],
@@ -182,19 +192,33 @@ class DiffTableModelDelegate extends TableModelDelegate
         }
     }
 
-    /** Only column 0 (checkbox) is editable */
     public function cellEditable(int $row, int $column): ?bool
     {
         return $column === 0 ? true : null;
+    }
+
+    // ── Colour helpers (lazily created) ──────────────────────
+
+    private static function colorSafe(): Color
+    {
+        return self::$riskColorSafe ??= Color::rgba(0.2, 0.7, 0.2, 1.0);
+    }
+
+    private static function colorWarn(): Color
+    {
+        return self::$riskColorWarn ??= Color::rgba(0.85, 0.65, 0.0, 1.0);
+    }
+
+    private static function colorHigh(): Color
+    {
+        return self::$riskColorHigh ??= Color::rgba(0.85, 0.2, 0.2, 1.0);
     }
 
     private function changesSummary(array $changes): string
     {
         $parts = [];
         foreach ($changes as $c) {
-            $col = $c['column'] ?? '';
-            $kind = $c['kind'] ?? '';
-            $parts[] = "{$kind}:{$col}";
+            $parts[] = ($c['kind'] ?? '') . ':' . ($c['column'] ?? '');
         }
         return implode(', ', $parts);
     }

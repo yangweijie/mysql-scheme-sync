@@ -21,6 +21,7 @@ class ConnectionWindow
     private ?Window $window = null;
     private Form $form;
     private Label $status;
+    private Entry $portEntry;
 
     public function __construct(ConfigStore $store, ?callable $onChange = null)
     {
@@ -44,7 +45,9 @@ class ConnectionWindow
         $this->form->setPadded(true);
         $this->form->append('连接名称', new Entry());
         $this->form->append('主机', new Entry());
-        $this->form->append('端口', new Entry());
+        $this->portEntry = new Entry();
+        $this->portEntry->setText('3306');
+        $this->form->append('端口', $this->portEntry);
         $this->form->append('用户名', new Entry());
         $this->form->append('密码', Entry::password());
         $this->form->append('默认数据库', new Entry());
@@ -219,12 +222,53 @@ class ConnectionWindow
             $this->status->setText('连接不存在');
             return;
         }
+        if (!$this->confirmDelete($data['name'])) return;
         $this->store->remove($id);
         $this->form->setValues([]);
         $this->status->setText("已删除：{$data['name']}");
         if ($this->onChange) {
             ($this->onChange)();
         }
+    }
+
+    /** Show a confirmation dialog, returns true if confirmed. */
+    private function confirmDelete(string $name): bool
+    {
+        $confirmed = false;
+        $dlg = new Window('确认删除', 320, 140);
+        $dlg->setMargined(true);
+        $dlg->onClosing(function () {
+            return true; // 关闭按钮 = 取消，$confirmed 保持 false
+        });
+        if ($this->window) {
+            [$px, $py] = $this->window->getPosition();
+            [$pw, $ph] = $this->window->getContentSize();
+            [$w, $h]   = $dlg->getContentSize();
+            $dlg->setPosition(max(0, (int)($px + ($pw - $w) / 2)), max(0, (int)($py + ($ph - $h) / 2)));
+        }
+        $box = new Box();
+        $box->setPadded(true);
+        $box->append(new Label("确定要删除连接「{$name}」吗？\n此操作不可撤销。"), false);
+
+        $btnRow = Box::horizontal();
+        $btnRow->setPadded(true);
+        $cancelBtn = new Button('取消');
+        $cancelBtn->onClicked(function () use ($dlg) {
+            $dlg->hide();
+        });
+        $confirmBtn = new Button('确认删除');
+        $confirmBtn->onClicked(function () use ($dlg, &$confirmed) {
+            $confirmed = true;
+            $dlg->hide();
+        });
+        $btnRow->append($cancelBtn, false);
+        $btnRow->append($confirmBtn, false);
+
+        $box->append($btnRow, false);
+        $dlg->setChild($box);
+        $dlg->show();
+
+        return $confirmed;
     }
 
     private function onImport(): void

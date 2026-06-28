@@ -31,6 +31,7 @@ class MainWindow
     private Entry $filterEntry;
     private Label $statusLabel;
     private Button $generateBtn;
+    private Label $selectCountLabel;
 
     /** A dedicated box in the layout that gets replaced with results or placeholder. */
     private Box $resultArea;
@@ -60,6 +61,14 @@ class MainWindow
         $this->tgtCombo = new Combobox();
         $this->refreshConnectionLists();
 
+        $swapBtn = new Button('⇄');
+        $swapBtn->onClicked(function () {
+            $srcIdx = $this->srcCombo->selected();
+            $tgtIdx = $this->tgtCombo->selected();
+            $this->srcCombo->setSelected($tgtIdx);
+            $this->tgtCombo->setSelected($srcIdx);
+        });
+
         $compareBtn = new Button('▶ 开始比对');
         $compareBtn->onClicked($this->onCompare(...));
 
@@ -68,6 +77,7 @@ class MainWindow
 
         $header->append(new Label('源库:'), false);
         $header->append($this->srcCombo, true);
+        $header->append($swapBtn, false);
         $header->append(new Label('目标库:'), false);
         $header->append($this->tgtCombo, true);
         $header->append($compareBtn, false);
@@ -153,9 +163,11 @@ class MainWindow
         }
 
         $this->statusLabel->setText('正在读取源库元数据...');
+        try { \Libui\Ffi::get()->uiMainStep(0); } catch (\Throwable $e) {}
         $sourceSchema = Schema::fromConnection($src);
 
         $this->statusLabel->setText('正在读取目标库元数据...');
+        try { \Libui\Ffi::get()->uiMainStep(0); } catch (\Throwable $e) {}
         $this->targetSchema = Schema::fromConnection($tgt);
 
         $this->sourceSchema = $sourceSchema;
@@ -176,8 +188,18 @@ class MainWindow
         // Clear previous result area children
         $this->clearResultArea();
 
-        // Summary line
-        $summaryText = "比对结果：{$src->name} → {$tgt->name}  |  源库: {$sourceSchema->version}  |  目标库: {$this->targetSchema->version}";
+        // Build category breakdown summary
+        $parts = [];
+        if ($this->lastDiff->newTables) $parts[] = '新增表 ' . count($this->lastDiff->newTables);
+        if ($this->lastDiff->changedTables) $parts[] = '变更表 ' . count($this->lastDiff->changedTables);
+        if ($this->lastDiff->removedTables) $parts[] = '删除表 ' . count($this->lastDiff->removedTables);
+        $extraCount = $this->lastDiff->total();
+        foreach (['newIndexes','removedIndexes','newForeignKeys','removedForeignKeys','newTriggers','removedTriggers','newViews','removedViews','newProcedures','removedProcedures','newFunctions','removedFunctions','newEvents','removedEvents'] as $prop) {
+            $extraCount -= count($this->lastDiff->$prop);
+        }
+        if ($extraCount > 0) $parts[] = "其他 {$extraCount}";
+
+        $summaryText =  "{$src->name} → {$tgt->name}  |  " . implode(' / ', $parts) . "  |  源库 {$sourceSchema->version}";
         $this->summaryLabel = new Label($summaryText);
         $this->resultArea->append($this->summaryLabel, false);
 
@@ -205,6 +227,9 @@ class MainWindow
         $toolBar->append($safeOnlyBtn, false);
         $toolBar->append($warnOnlyBtn, false);
         $toolBar->append($highOnlyBtn, false);
+
+        $this->selectCountLabel = new Label('');
+        $toolBar->append($this->selectCountLabel, true);
 
         $this->resultArea->append($toolBar, false);
 
@@ -235,7 +260,7 @@ class MainWindow
 
         $this->diffDelegate = $delegate;
 
-        // Button text update on checkbox toggle
+        // Button + count label update on checkbox toggle
         $delegate->onToggle(function () use ($delegate) {
             $sel = $delegate->selectedCount();
             $total = $delegate->totalCount();
@@ -244,13 +269,14 @@ class MainWindow
                     ? "📋 生成迁移 SQL ({$sel})"
                     : "📋 生成迁移 SQL（已选 {$sel}/{$total}）"
             );
+            $this->selectCountLabel->setText("已选 {$sel}/{$total}");
         });
 
         $table = Table::fromModel($model);
         $table->appendCheckboxColumn('✓', 0, 0);
         $table->appendTextColumn('类型', 1);
         $table->appendTextColumn('名称', 2);
-        $table->appendTextColumn('风险', 3);
+        $table->appendTextColumn('风险', 3, null, 5);   // text colour from model col 5
         $table->appendTextColumn('详情', 4);
         $table->setColumnWidth(0, 40);
         $table->setColumnWidth(1, 120);
@@ -269,6 +295,7 @@ class MainWindow
         $total = $delegate->totalCount();
         $this->statusLabel->setText("比对完成：{$total} 处差异");
         $this->generateBtn->setText("📋 生成迁移 SQL ({$total})");
+        $this->selectCountLabel->setText("已选 {$total}/{$total}");
     }
 
     private function clearResultArea(): void
@@ -314,6 +341,7 @@ class MainWindow
                 ? "📋 生成迁移 SQL ({$sel})"
                 : "📋 生成迁移 SQL（已选 {$sel}/{$total}）"
         );
+        $this->selectCountLabel->setText("已选 {$sel}/{$total}");
     }
 
     private function onGenerateSql(): void
