@@ -13,16 +13,30 @@ class ConfigStore
     private string $keyFile;
     /** @var array<string, Connection> */
     public array $connections = [];
+    /** @var array<string, mixed> */
+    public array $settings = [];
 
     public function __construct()
     {
-        $this->configDir  = $_SERVER['HOME'] . '/.mysql-schema-sync';
+        $home = $_SERVER['HOME'] ?? $_SERVER['USERPROFILE'] ?? getenv('HOME') ?: getenv('USERPROFILE');
+        $this->configDir  = $home . '/.mysql-schema-sync';
         $this->configFile = $this->configDir . '/config.json';
         $this->keyFile    = $this->configDir . '/.key';
         if (!is_dir($this->configDir)) {
             mkdir($this->configDir, 0700, true);
         }
         $this->load();
+    }
+
+    public function getSetting(string $key, mixed $default = null): mixed
+    {
+        return $this->settings[$key] ?? $default;
+    }
+
+    public function setSetting(string $key, mixed $value): void
+    {
+        $this->settings[$key] = $value;
+        $this->save();
     }
 
     public function add(Connection $conn): void
@@ -80,12 +94,13 @@ class ConfigStore
             $conn->password = $this->decrypt($conn->password, $key);
             $this->connections[$conn->id] = $conn;
         }
+        $this->settings = $enc['settings'] ?? [];
     }
 
     private function save(): void
     {
         $key = $this->getKey();
-        $data = ['connections' => []];
+        $data = ['connections' => [], 'settings' => $this->settings];
         foreach ($this->connections as $conn) {
             $arr = $conn->toArray();
             $arr['password'] = $this->encrypt($conn->password, $key);

@@ -4,8 +4,41 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "63d65358ceb8dfcec7b525902d3dfe64",
+    "content-hash": "e316d415f3ea18dd013d17e33e650cd1",
     "packages": [
+        {
+            "name": "9raxdev/mysql-struct-sync",
+            "version": "1.0.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/9raxdev/mysql-struct-sync.git",
+                "reference": "f9f7c57f3c10fe1c11ced0a85d02e91dc1b633bd"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://mirrors.huaweicloud.com/repository/php/9raxdev/mysql-struct-sync/1.0.1/9raxdev-mysql-struct-sync-1.0.1.zip",
+                "reference": "f9f7c57f3c10fe1c11ced0a85d02e91dc1b633bd",
+                "shasum": ""
+            },
+            "require": {
+                "ext-mysqli": "*",
+                "php": ">=5.4.0"
+            },
+            "type": "library",
+            "autoload": {
+                "files": [
+                    "MysqlStructSync.php"
+                ]
+            },
+            "authors": [
+                {
+                    "name": "linge",
+                    "email": "9rax.dev@gmail.com"
+                }
+            ],
+            "description": "可用于帮助开发人员比较两个数据库之间的差异(表,列,约束,事件,函数,存储过程,触发器,视图),并生成更新语句。Can be used to synchronize database structures, compare differences(table,column,constraints,events,functions,procedures,triggers,views) between databases and generating queries.",
+            "time": "2019-08-30T11:55:28+00:00"
+        },
         {
             "name": "helgesverre/libui",
             "version": "v0.7.1",
@@ -64,8 +97,11 @@
     "prefer-stable": false,
     "prefer-lowest": false,
     "platform": {
-        "php": ">=8.5"
+        "php": ">=8.5",
+        "ext-pdo": "*",
+        "ext-openssl": "*",
+        "ext-ffi": "*"
     },
     "platform-dev": {},
-    "plugin-api-version": "2.6.0"
+    "plugin-api-version": "2.9.0"
 }

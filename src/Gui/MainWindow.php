@@ -9,21 +9,22 @@ use Libui\Combobox;
 use Libui\Entry;
 use Libui\Label;
 use Libui\MultilineEntry;
+use Libui\ProgressBar;
 use Libui\Table;
 use Libui\TableModel;
 use Libui\Window;
+use Libui\Loop;
 use MySqlSchemaSync\Config\ConfigStore;
 use MySqlSchemaSync\Config\Connection;
+use MySqlSchemaSync\Diff\StructSyncAdapter;
 use MySqlSchemaSync\Diff\DiffResult;
-use MySqlSchemaSync\Diff\Schema;
 use MySqlSchemaSync\SqlGen\Generator;
 
 class MainWindow
 {
     private ConfigStore $store;
     private ?DiffResult $lastDiff = null;
-    private ?Schema $sourceSchema = null;
-    private ?Schema $targetSchema = null;
+    private ?StructSyncAdapter $adapter = null;
 
     private Window $window;
     private Combobox $srcCombo;
@@ -31,6 +32,10 @@ class MainWindow
     private Entry $filterEntry;
     private Label $statusLabel;
     private Button $generateBtn;
+    private Button $compareBtn;
+    private Button $manageBtn;
+    private Button $cancelBtn;
+    private ProgressBar $progressBar;
     private Label $selectCountLabel;
 
     /** A dedicated box in the layout that gets replaced with results or placeholder. */
@@ -48,7 +53,9 @@ class MainWindow
     public function run(): void
     {
         $this->window = new Window('MySQL SchemaSync (PHP + libui)', 1000, 700);
-        $this->window->setMargined(true)->setResizeable(true);
+        $this->window->setMargined(true)->setResizeable(true)
+        // ->centered()
+        ;
 
         $root = new Box();
         $root->setPadded(true);
@@ -69,19 +76,19 @@ class MainWindow
             $this->tgtCombo->setSelected($srcIdx);
         });
 
-        $compareBtn = new Button('▶ 开始比对');
-        $compareBtn->onClicked($this->onCompare(...));
+        $this->compareBtn = new Button('▶ 开始比对');
+        $this->compareBtn->onClicked($this->onCompare(...));
 
-        $manageBtn = new Button('⚙ 连接管理');
-        $manageBtn->onClicked($this->onManageConnections(...));
+        $this->manageBtn = new Button('⚙ 连接管理');
+        $this->manageBtn->onClicked($this->onManageConnections(...));
 
         $header->append(new Label('源库:'), false);
         $header->append($this->srcCombo, true);
         $header->append($swapBtn, false);
         $header->append(new Label('目标库:'), false);
         $header->append($this->tgtCombo, true);
-        $header->append($compareBtn, false);
-        $header->append($manageBtn, false);
+        $header->append($this->compareBtn, false);
+        $header->append($this->manageBtn, false);
 
         $root->append($header, false);
 
@@ -89,7 +96,8 @@ class MainWindow
         $filterRow = Box::horizontal();
         $filterRow->setPadded(true);
         $this->filterEntry = new Entry();
-        $this->filterEntry->setText('*_bak, *_backup*, tmp_*');
+        $saved = $this->store->getSetting('excludePatterns', '*_bak, *_backup*, tmp_*');
+        $this->filterEntry->setText($saved);
         $filterRow->append(new Label('排除表 (逗号分隔 glob):'), false);
         $filterRow->append($this->filterEntry, true);
         $root->append($filterRow, false);
@@ -100,6 +108,23 @@ class MainWindow
         $placeholder = new Label("请选择源库和目标库，然后点击「开始比对」。\n说明：源库 = 新结构（如测试库），目标库 = 要同步到的旧结构（如生产库）。");
         $this->resultArea->appendStretchy($placeholder);
         $root->appendStretchy($this->resultArea);
+
+        // Progress bar (hidden by default)
+        $progressRow = Box::horizontal();
+        $progressRow->setPadded(true);
+        $this->progressBar = new ProgressBar();
+        $this->progressBar->setValue(0);
+        $this->progressBar->hide();
+        $this->cancelBtn = new Button('取消');
+        $this->cancelBtn->hide();
+        $this->cancelBtn->onClicked(function () {
+            if ($this->adapter) {
+                $this->adapter->cancel();
+            }
+        });
+        $progressRow->append($this->progressBar, true);
+        $progressRow->append($this->cancelBtn, false);
+        $root->append($progressRow, false);
 
         // Footer
         $footer = Box::horizontal();
@@ -113,6 +138,9 @@ class MainWindow
 
         $root->append($footer, false);
 
+        $this->window->onClosing(function () {
+            return true;
+        });
         $this->window->setChild($root);
         $this->window->run();
     }
@@ -162,29 +190,42 @@ class MainWindow
             return;
         }
 
-        $this->statusLabel->setText('正在读取源库元数据...');
-        try { \Libui\Ffi::get()->uiMainStep(0); } catch (\Throwable $e) {}
-        $sourceSchema = Schema::fromConnection($src);
+        $this->store->setSetting('excludePatterns', trim($this->filterEntry->text()));
 
-        $this->statusLabel->setText('正在读取目标库元数据...');
-        try { \Libui\Ffi::get()->uiMainStep(0); } catch (\Throwable $e) {}
-        $this->targetSchema = Schema::fromConnection($tgt);
+        $this->compareBtn->disable();
+        $this->manageBtn->disable();
+        $this->generateBtn->disable();
+        $this->statusLabel->setText('正在比对...');
+        $this->showPlaceholder("正在连接数据库并读取结构信息...");
+        $this->progressBar->setValue(-1);
+        $this->progressBar->show();
+        $this->cancelBtn->show();
 
-        $this->sourceSchema = $sourceSchema;
-        $this->lastDiff = DiffResult::compare($this->sourceSchema, $this->targetSchema, $this->getExcludePatterns());
+        Loop::defer(function () use ($src, $tgt) {
+            $this->adapter = new StructSyncAdapter($src, $tgt);
+            $this->lastDiff = $this->adapter->compare($this->getExcludePatterns());
 
-        if ($this->lastDiff->error) {
-            $this->statusLabel->setText('比对失败');
-            $this->showPlaceholder("❌ 错误：{$this->lastDiff->error}");
-            return;
-        }
+            $this->progressBar->setValue(0);
+            $this->progressBar->hide();
+            $this->cancelBtn->hide();
 
-        $this->buildDiffTable($src, $tgt, $sourceSchema);
+            if ($this->lastDiff->error) {
+                $this->statusLabel->setText('比对失败');
+                $this->showPlaceholder("❌ 错误：{$this->lastDiff->error}");
+            } else {
+                $this->statusLabel->setText('比对完成');
+                $this->buildDiffTable($src, $tgt);
+            }
+
+            $this->compareBtn->enable();
+            $this->manageBtn->enable();
+        });
     }
 
     /** Clear the result area and rebuild with table/toolbar. */
-    private function buildDiffTable(Connection $src, Connection $tgt, Schema $sourceSchema): void
+    private function buildDiffTable(Connection $src, Connection $tgt): void
     {
+        $this->generateBtn->enable();
         // Clear previous result area children
         $this->clearResultArea();
 
@@ -199,7 +240,7 @@ class MainWindow
         }
         if ($extraCount > 0) $parts[] = "其他 {$extraCount}";
 
-        $summaryText =  "{$src->name} → {$tgt->name}  |  " . implode(' / ', $parts) . "  |  源库 {$sourceSchema->version}";
+        $summaryText =  "{$src->name} → {$tgt->name}  |  " . implode(' / ', $parts);
         $this->summaryLabel = new Label($summaryText);
         $this->resultArea->append($this->summaryLabel, false);
 
@@ -361,7 +402,7 @@ class MainWindow
 
         $src = $this->getSelectedConnection($this->srcCombo);
         $tgt = $this->getSelectedConnection($this->tgtCombo);
-        $gen = new Generator($src, $tgt, $this->sourceSchema, $this->targetSchema);
+        $gen = new Generator($src, $tgt, $this->adapter);
         $sql = $gen->generate($filtered);
 
         $win = new Window('生成的迁移 SQL', 800, 500);
@@ -380,10 +421,20 @@ class MainWindow
         $btnRow->setPadded(true);
         $copy = new Button('📋 复制到剪贴板');
         $copy->onClicked(function () use ($text, $win) {
-            if (function_exists('shell_exec')) {
-                shell_exec("echo '" . str_replace("'", "'\\''", $text->text()) . "' | pbcopy");
+            $content = $text->text();
+            $ok = false;
+            if (DIRECTORY_SEPARATOR === '\\') {
+                $tmp = tempnam(sys_get_temp_dir(), 'mss_');
+                file_put_contents($tmp, $content);
+                shell_exec('clip < "' . $tmp . '"');
+                @unlink($tmp);
+                $ok = true;
+            } elseif (function_exists('shell_exec')) {
+                $escaped = str_replace("'", "'\\''", $content);
+                shell_exec("echo '{$escaped}' | pbcopy");
+                $ok = true;
             }
-            $win->dialogs()->msgBox('已复制', 'SQL 已复制到剪贴板。');
+            $win->dialogs()->msgBox('已复制', $ok ? 'SQL 已复制到剪贴板。' : '复制失败，请手动复制。');
         });
         $save = new Button('💾 保存为 .sql');
         $save->onClicked(function () use ($text, $win) {

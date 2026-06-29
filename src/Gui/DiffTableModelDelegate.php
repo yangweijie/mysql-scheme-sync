@@ -59,16 +59,25 @@ class DiffTableModelDelegate extends TableModelDelegate
     ): void {
         $this->rows = [];
 
+        $newTableNames = [];
+        foreach ($newTables as $t) {
+            $newTableNames[$t['name'] ?? ''] = true;
+        }
+        $removedTableNames = [];
+        foreach ($removedTables as $t) {
+            $removedTableNames[$t['name'] ?? ''] = true;
+        }
+
         $sections = [
             ['type' => '新增表',       'items' => $newTables,         'detailFn' => fn($i) => ''],
             ['type' => '变更表',       'items' => $changedTables,    'detailFn' => fn($i) => $this->changesSummary($i['changes'] ?? [])],
             ['type' => '删除表',       'items' => $removedTables,    'detailFn' => fn($i) => ''],
-            ['type' => '新增索引',     'items' => $newIndexes,       'detailFn' => fn($i) => 'on ' . ($i['table'] ?? '')],
-            ['type' => '删除索引',     'items' => $removedIndexes,   'detailFn' => fn($i) => 'on ' . ($i['table'] ?? '')],
-            ['type' => '新增外键',     'items' => $newForeignKeys,   'detailFn' => fn($i) => 'on ' . ($i['table'] ?? '')],
-            ['type' => '删除外键',     'items' => $removedForeignKeys,'detailFn' => fn($i) => 'on ' . ($i['table'] ?? '')],
-            ['type' => '新增触发器',   'items' => $newTriggers,      'detailFn' => fn($i) => 'on ' . ($i['table'] ?? '')],
-            ['type' => '删除触发器',   'items' => $removedTriggers,  'detailFn' => fn($i) => 'on ' . ($i['table'] ?? '')],
+            ['type' => '新增索引',     'items' => $newIndexes,       'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $newTableNames],
+            ['type' => '删除索引',     'items' => $removedIndexes,   'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $removedTableNames],
+            ['type' => '新增外键',     'items' => $newForeignKeys,   'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $newTableNames],
+            ['type' => '删除外键',     'items' => $removedForeignKeys,'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $removedTableNames],
+            ['type' => '新增触发器',   'items' => $newTriggers,      'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $newTableNames],
+            ['type' => '删除触发器',   'items' => $removedTriggers,  'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $removedTableNames],
             ['type' => '新增视图',     'items' => $newViews,         'detailFn' => fn($i) => ''],
             ['type' => '删除视图',     'items' => $removedViews,     'detailFn' => fn($i) => ''],
             ['type' => '新增存储过程', 'items' => $newProcedures,    'detailFn' => fn($i) => ''],
@@ -81,6 +90,9 @@ class DiffTableModelDelegate extends TableModelDelegate
 
         foreach ($sections as $sec) {
             foreach ($sec['items'] as $item) {
+                if (isset($sec['childOf']) && isset($sec['parentSet'][$sec['childOf']($item)])) {
+                    continue;
+                }
                 $this->rows[] = [
                     'checked' => true,
                     'type'    => $sec['type'],

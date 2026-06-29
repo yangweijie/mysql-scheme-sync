@@ -22,6 +22,7 @@ class ConnectionWindow
     private Form $form;
     private Label $status;
     private Entry $portEntry;
+    private ?string $editingId = null;
 
     public function __construct(ConfigStore $store, ?callable $onChange = null)
     {
@@ -142,7 +143,7 @@ class ConnectionWindow
             $this->status->setText('❌ 名称、主机、默认数据库不能为空');
             return;
         }
-        $id = preg_replace('/[^a-z0-9_-]/i', '_', $data['name']);
+        $id = $this->editingId ?? bin2hex(random_bytes(8));
         $conn = new Connection(
             id: $id,
             name: $data['name'],
@@ -153,6 +154,7 @@ class ConnectionWindow
             database: $data['database'],
         );
         $this->store->add($conn);
+        $this->editingId = $id;
         $this->status->setText("✅ 已保存：{$data['name']}");
         if ($this->onChange) {
             ($this->onChange)();
@@ -197,6 +199,7 @@ class ConnectionWindow
             $idx = $combo->selected();
             if ($idx < 0 || !isset($connList[$idx])) return;
             $c = $connList[$idx];
+            $this->editingId = $c->id;
             $this->form->setValues([
                 '连接名称'  => $c->name,
                 '主机'      => $c->host,
@@ -216,14 +219,14 @@ class ConnectionWindow
 
     private function onDelete(): void
     {
-        $data = $this->readForm();
-        $id = preg_replace('/[^a-z0-9_-]/i', '_', $data['name']);
-        if (!$this->store->get($id)) {
-            $this->status->setText('连接不存在');
+        if (!$this->editingId || !$this->store->get($this->editingId)) {
+            $this->status->setText('请先加载要删除的连接');
             return;
         }
+        $data = $this->readForm();
         if (!$this->confirmDelete($data['name'])) return;
-        $this->store->remove($id);
+        $this->store->remove($this->editingId);
+        $this->editingId = null;
         $this->form->setValues([]);
         $this->status->setText("已删除：{$data['name']}");
         if ($this->onChange) {
