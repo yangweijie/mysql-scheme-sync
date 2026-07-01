@@ -57,3 +57,4 @@
 | PDO 对象不能做数组 key | PHP 限制 | 改用 [['pdo'=>$p,'sk'=>$s]] 格式 |
 | 自实现比较逻辑差异多 | 库的 _array_intersect_assoc 行为不同 | 直接调用库的 baseDiff/advanceDiff |
 | 358/125/80 处差异 | 自己的比较逻辑与库不一致 | 放弃自实现，直接包装库方法 |
+| Call to undefined method setExcludePatterns() | 库缺少排除过滤方法 | 在 MysqlStructSync 中添加 setExcludePatterns/matchesExclude/buildSqlExclude + 拆分 fetch/compare 方法 |
