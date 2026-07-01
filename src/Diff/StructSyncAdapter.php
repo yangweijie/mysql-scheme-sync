@@ -8,8 +8,6 @@ class StructSyncAdapter
     private \linge\MysqlStructSync $sync;
     private array $diffSql = [];
     private bool $cancelled = false;
-    public int $currentStep = 0;
-    public int $totalSteps = 0;
     private ?\Closure $onProgress = null;
 
     public function cancel(): void { $this->cancelled = true; }
@@ -21,27 +19,34 @@ class StructSyncAdapter
             ['host' => $target->host, 'username' => $target->user, 'passwd' => $target->password, 'dbname' => $target->database, 'port' => $target->port],
             ['host' => $source->host, 'username' => $source->user, 'passwd' => $source->password, 'dbname' => $source->database, 'port' => $source->port]
         );
-        $this->sync->on_progress = function () {
-            $this->currentStep++;
-            if ($this->onProgress) ($this->onProgress)();
-        };
     }
 
-    public function setOnProgress(\Closure $cb): void { $this->onProgress = $cb; }
-    public function setTotalSteps(int $n): void { $this->totalSteps = $n; }
+    public function setOnProgress(\Closure $cb): void { $this->sync->on_progress = $cb; }
+    public function setOnPhase(\Closure $cb): void { $this->sync->on_phase = $cb; }
+
+    public function fetchAll(array $excludePatterns = []): void
+    {
+        $this->sync->setExcludePatterns($excludePatterns);
+        $this->sync->fetchBaseStructs();
+        $this->sync->fetchAdvanceStructs();
+    }
 
     public function compare(array $excludePatterns = []): DiffResult
     {
         $d = new DiffResult();
         if ($this->cancelled) { $d->error = '比对已取消'; return $d; }
 
-        $this->sync->setExcludePatterns($excludePatterns);
-
         $lastError = '';
         set_error_handler(function ($errno, $errstr) use (&$lastError) { $lastError = $errstr; return true; }, E_WARNING);
 
-        try { $this->sync->baseDiff(); } catch (\Throwable $e) { $d->error = $e->getMessage(); restore_error_handler(); return $d; }
-        try { $this->sync->advanceDiff(); } catch (\Throwable $e) { $d->error = $e->getMessage(); restore_error_handler(); return $d; }
+        try {
+            $this->sync->compareBaseStructs();
+            $this->sync->compareAdvanceStructs();
+        } catch (\Throwable $e) {
+            $d->error = $e->getMessage();
+            restore_error_handler();
+            return $d;
+        }
 
         restore_error_handler();
         if (!empty($lastError)) { $d->error = $lastError; return $d; }

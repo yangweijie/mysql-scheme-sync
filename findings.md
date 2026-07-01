@@ -16,6 +16,14 @@
 - SQL 层过滤：`*` → `%`，`?` → `_`，字面量用 `!=`
 - PHP 层兜底：matchesExclude 仍在循环中作为备份
 
+## 库的拆分架构
+- `fetchBaseStructs()` — 查询两个库的表结构（SHOW CREATE TABLE × N）
+- `fetchAdvanceStructs()` — 查询视图/触发器/事件/函数/存储过程
+- `compareBaseStructs()` — 纯计算：表差异 + 列差异 + 约束差异
+- `compareAdvanceStructs()` — 纯计算：高级对象差异
+- `on_phase($label, $cur, $total)` — 阶段切换回调
+- `on_progress($name, $cur, $total)` — 单项查询完成回调
+
 ## libui Loop 异步机制
 - `Loop::defer()` — 下一个 tick 执行一次
 - `Loop::repeat(ms, cb)` — 重复定时器，cb 返回 false 停止

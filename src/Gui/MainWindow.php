@@ -201,18 +201,27 @@ class MainWindow
 
         Loop::delay(10, function () use ($src, $tgt, $patterns) {
             $this->adapter = new StructSyncAdapter($src, $tgt);
-            $this->adapter->setTotalSteps(400);
-            $total = 400;
 
             $this->progressBar->setValue(0);
             $this->progressBar->show();
             $this->cancelBtn->show();
+            $this->statusLabel->setText('正在查询...');
 
-            $this->adapter->setOnProgress(function () use ($total) {
-                $pct = min(100, (int)(($this->adapter->currentStep / $total) * 100));
+            $this->adapter->setOnPhase(function ($label, $cur, $total) {
+                $pct = $total > 0 ? (int)(($cur / $total) * 100) : 0;
                 $this->progressBar->setValue($pct);
-                $this->statusLabel->setText("正在读取结构 ({$this->adapter->currentStep}/{$total})...");
+                $this->statusLabel->setText("{$label} ({$cur}/{$total})...");
             });
+
+            $this->adapter->setOnProgress(function ($name, $cur, $total) {
+                $pct = $total > 0 ? (int)(($cur / $total) * 100) : 0;
+                $this->progressBar->setValue($pct);
+            });
+
+            $this->adapter->fetchAll($patterns);
+
+            $this->progressBar->setValue(-1);
+            $this->statusLabel->setText('比较中...');
 
             $this->lastDiff = $this->adapter->compare($patterns);
 

@@ -25,9 +25,13 @@
 - [x] 交换 source/target 解决比对方向问题
 - [x] 修复库的 `SHOW CREATE TABLE` 缺少反引号
 - [x] 重写 Generator 使用库的 diffSql 输出
-- [x] 进度条（确定模式）+ 库的 on_progress 回调更新
+- [x] 进度条按阶段独立显示（查询表/视图/触发器等各自 0→100%）
 - [x] 库的 getStructure/advanceDiff 加 SQL 层排除过滤（加速）
 - [x] 库加 setExcludePatterns/matchesExclude/buildSqlExclude 方法
+- [x] 库拆分 fetchBaseStructs/fetchAdvanceStructs + compareBaseStructs/compareAdvanceStructs
+- [x] on_phase 回调按阶段更新进度条标签
+- [x] on_progress 回调按查询项更新进度条百分比
+- [x] fetchAll 传排除模式给库（SQL 层过滤生效）
 
 ### Phase 4: 待改进 ⬜
 - [ ] 比对期间 UI 完全不阻塞（需要 pcntl_fork 或其他异步方案）
