@@ -21,24 +21,26 @@
 
 ### Phase 3: 库集成 ✅
 - [x] 集成 `9raxdev/mysql-struct-sync` 库
-- [x] 创建 StructSyncAdapter 适配器
+- [x] 创建 StructSyncAdapter 适配器（包装库方法）
 - [x] 交换 source/target 解决比对方向问题
 - [x] 修复库的 `SHOW CREATE TABLE` 缺少反引号
 - [x] 重写 Generator 使用库的 diffSql 输出
-- [x] 进度条（不确定模式）+ Loop::defer() 刷新 UI
+- [x] 进度条（确定模式）+ 库的 on_progress 回调更新
+- [x] 库的 getStructure/advanceDiff 加 SQL 层排除过滤（加速）
+- [x] 库加 setExcludePatterns/matchesExclude/buildSqlExclude 方法
 
 ### Phase 4: 待改进 ⬜
 - [ ] 比对期间 UI 完全不阻塞（需要 pcntl_fork 或其他异步方案）
 - [ ] 取消按钮实际生效（库的同步调用期间无法中断）
-- [ ] 变更表的 MODIFY COLUMN 列定义来自库的输出而非 SHOW CREATE TABLE
 
 ## 技术决策
 | 决策 | 原因 |
 |------|------|
 | 用 `9raxdev/mysql-struct-sync` 做核心对比 | 用户要求，库已安装 |
-| 进度条用 -1 不确定模式 | 库的调用是同步的，无法分步 |
+| 进度条用确定模式 + 库回调 | 库的调用是同步的，回调在每个 SHOW CREATE 间触发 |
 | Generator 直接用库的 diffSql | 库生成的 SQL 已含完整定义 |
 | 交换 source/target 传给库 | 库的 ADD/DROP 方向与用户预期相反 |
+| SQL 层排除过滤 | 加速初始列表查询，减少无用 SHOW CREATE |
 
 ## 错误记录
 | 错误 | 原因 | 修复 |
@@ -48,3 +50,6 @@
 | MODIFY COLUMN 为空 | 只取了 columnType 没取完整定义 | 改用库的 diffSql |
 | 库 SHOW CREATE TABLE 报错 | 表名未加反引号 | 修改 vendor 代码 |
 | preg_match_all Unknown modifier | PATTERNS 含多余 `/` 定界符 | 去掉定界符 |
+| PDO 对象不能做数组 key | PHP 限制 | 改用 [['pdo'=>$p,'sk'=>$s]] 格式 |
+| 自实现比较逻辑差异多 | 库的 _array_intersect_assoc 行为不同 | 直接调用库的 baseDiff/advanceDiff |
+| 358/125/80 处差异 | 自己的比较逻辑与库不一致 | 放弃自实现，直接包装库方法 |

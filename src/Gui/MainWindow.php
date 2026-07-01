@@ -191,21 +191,31 @@ class MainWindow
         }
 
         $this->store->setSetting('excludePatterns', trim($this->filterEntry->text()));
+        $patterns = $this->getExcludePatterns();
 
         $this->compareBtn->disable();
         $this->manageBtn->disable();
         $this->generateBtn->disable();
-        $this->statusLabel->setText('正在比对...');
-        $this->showPlaceholder("正在连接数据库并读取结构信息...");
-        $this->progressBar->setValue(-1);
-        $this->progressBar->show();
-        $this->cancelBtn->show();
+        $this->statusLabel->setText('正在连接数据库...');
+        $this->showPlaceholder("正在连接数据库...");
 
-        Loop::defer(function () use ($src, $tgt) {
+        Loop::delay(10, function () use ($src, $tgt, $patterns) {
             $this->adapter = new StructSyncAdapter($src, $tgt);
-            $this->lastDiff = $this->adapter->compare($this->getExcludePatterns());
+            $this->adapter->setTotalSteps(400);
+            $total = 400;
 
             $this->progressBar->setValue(0);
+            $this->progressBar->show();
+            $this->cancelBtn->show();
+
+            $this->adapter->setOnProgress(function () use ($total) {
+                $pct = min(100, (int)(($this->adapter->currentStep / $total) * 100));
+                $this->progressBar->setValue($pct);
+                $this->statusLabel->setText("正在读取结构 ({$this->adapter->currentStep}/{$total})...");
+            });
+
+            $this->lastDiff = $this->adapter->compare($patterns);
+
             $this->progressBar->hide();
             $this->cancelBtn->hide();
 

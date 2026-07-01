@@ -2,12 +2,19 @@
 
 ## 9raxdev/mysql-struct-sync 库
 - 命名空间 `linge`，类名 `MysqlStructSync`
-- 构造函数参数顺序：`old_db_conf` = 目标库(self)，`develop_db_conf` = 源库(refer)
+- 构造函数参数顺序：第一个 = 目标库(self)，第二个 = 源库(refer)
 - `baseDiff()` 比较表/列/约束，`advanceDiff()` 比较视图/触发器/事件/函数/存储过程
 - `getDiffSql()` 返回按类型分组的 SQL 数组
 - 库使用 `mysqli` 扩展（非 PDO）
-- 库有 `die()` 调用和 `$_POST` 检查，不适合 Web 环境
-- 库的 `SHOW CREATE TABLE` 未加反引号，对保留字表名会报错
+- 库的 `_array_intersect_assoc` 是自定义方法，不是 PHP 内置的
+- 库的比较逻辑：先过滤表级差异，再比较列/约束，最后比较高级对象
+
+## 库的排除过滤机制
+- `setExcludePatterns(array)` 设置排除模式
+- `matchesExclude(string)` 检查名称是否匹配（fnmatch）
+- `buildSqlExclude(string $col)` 生成 SQL WHERE 子句
+- SQL 层过滤：`*` → `%`，`?` → `_`，字面量用 `!=`
+- PHP 层兜底：matchesExclude 仍在循环中作为备份
 
 ## libui Loop 异步机制
 - `Loop::defer()` — 下一个 tick 执行一次
@@ -26,10 +33,11 @@
 src/
 ├── Config/ConfigStore.php   — 连接配置 + settings 持久化（AES-256-GCM）
 ├── Config/Connection.php    — 连接数据类
-├── Diff/StructSyncAdapter.php — 库的适配器（比对逻辑）
+├── Diff/StructSyncAdapter.php — 库的适配器（包装 baseDiff/advanceDiff）
 ├── Diff/DiffResult.php      — 差异结果数据结构
-├── Gui/MainWindow.php       — 主窗口（libui）
+├── Diff/Schema.php          — 不再使用（保留）
+├── Gui/MainWindow.php       — 主窗口（libui + Loop 调度）
 ├── Gui/ConnectionWindow.php — 连接管理窗口
 ├── Gui/DiffTableModelDelegate.php — 差异表格模型
-└── SqlGen/Generator.php     — 迁移 SQL 生成
+└── SqlGen/Generator.php     — 迁移 SQL 生成（用库的 diffSql）
 ```
