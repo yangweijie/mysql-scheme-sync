@@ -21,12 +21,19 @@ use MySqlSchemaSync\Diff\DiffResult;
 use MySqlSchemaSync\SqlGen\Generator;
 use Yangweijie\Ui2\Dialogs\MessageBox;
 use Libui\Form;
+use MySqlSchemaSync\Diff\AsyncCompareRunner;
 
 class MainWindow
 {
     private ConfigStore $store;
     private ?DiffResult $lastDiff = null;
     private ?StructSyncAdapter $adapter = null;
+
+    /** @var ?array<string, array> Cached diffSql (used when no live adapter) */
+    private ?array $lastDiffSql = null;
+
+    /** @var ?AsyncCompareRunner Current async compare runner */
+    private ?AsyncCompareRunner $currentRunner = null;
 
     private Window $window;
     private Combobox $srcCombo;
@@ -133,9 +140,7 @@ class MainWindow
         $this->cancelBtn = new Button('取消');
         $this->cancelBtn->hide();
         $this->cancelBtn->onClicked(function () {
-            if ($this->adapter) {
-                $this->adapter->cancel();
-            }
+            $this->cancelCompare();
         });
         $progressRow->append($this->progressBar, true);
         $progressRow->append($this->cancelBtn, false);
@@ -295,50 +300,88 @@ class MainWindow
         $this->manageBtn->disable();
         $this->generateBtn->disable();
 
-        $this->statusLabel->setText('正在连接数据库...');
+        $this->currentRunner = null; // discard previous
+
+        $this->statusLabel->setText('正在连接源数据库...');
         $this->showPlaceholder("正在连接数据库...");
+        $this->progressBar->setValue(-1);
+        $this->progressBar->show();
+        $this->cancelBtn->show();
 
-        Loop::delay(10, function () use ($src, $tgt, $patterns) {
-            $this->adapter = new StructSyncAdapter($src, $tgt);
+        $runner = new AsyncCompareRunner();
 
-            $this->progressBar->setValue(0);
-            $this->progressBar->show();
-            $this->cancelBtn->show();
-            $this->statusLabel->setText('正在查询...');
+        $runner->setOnPhase(function (string $phase) {
+            $labels = [
+                'connecting'     => '正在连接数据库...',
+                'fetch_source'   => '正在获取源库表结构...',
+                'fetch_target'   => '正在获取目标库表结构...',
+                'fetch_advanced' => '正在获取高级对象...',
+                'comparing'      => '正在比对...',
+                'done'           => '比对完成',
+                'error'          => '比对出错',
+            ];
+            $this->statusLabel->setText($labels[$phase] ?? $phase);
+        });
 
-            $this->adapter->setOnPhase(function ($label, $cur, $total) {
-                $pct = $total > 0 ? (int)(($cur / $total) * 100) : 0;
+        $runner->setOnProgress(function (int $pct, string $message) {
+            if ($pct > 0) {
                 $this->progressBar->setValue($pct);
-                $this->statusLabel->setText("{$label} ({$cur}/{$total})...");
-            });
+            } else {
+                $this->progressBar->setValue(-1);
+            }
+            $this->statusLabel->setText($message);
+        });
 
-            $this->adapter->setOnProgress(function ($name, $cur, $total) {
-                $pct = $total > 0 ? (int)(($cur / $total) * 100) : 0;
-                $this->progressBar->setValue($pct);
-            });
-
-            $this->adapter->fetchAll($patterns);
-
-            $this->progressBar->setValue(-1);
-            $this->statusLabel->setText('比较中...');
-
-            $this->lastDiff = $this->adapter->compare($patterns);
+        $runner->setOnComplete(function (?DiffResult $result, array $diffSql) use ($src, $tgt) {
+            $this->lastDiff = $result;
+            $this->lastDiffSql = $diffSql;
 
             $this->progressBar->hide();
             $this->cancelBtn->hide();
 
-            if ($this->lastDiff->error) {
+            if (!$result || $result->error) {
+                $err = $result ? $result->error : '未知错误';
                 $this->statusLabel->setText('比对失败');
-                $this->showPlaceholder("❌ 错误：{$this->lastDiff->error}");
+                $this->showPlaceholder("❌ 错误：{$err}");
+                $this->enableControlsAfterCompare();
             } else {
                 $this->statusLabel->setText('比对完成');
-                // ✅ FIX: Update data in-place (Table was created before show())
-                $this->updateDiffTable($src, $tgt);
+                Loop::delay(1, function () use ($src, $tgt): void {
+                    $this->updateDiffTable($src, $tgt);
+                    $this->enableControlsAfterCompare();
+                });
             }
 
-            $this->compareBtn->enable();
-            $this->manageBtn->enable();
+            $this->currentRunner = null;
         });
+
+        $this->currentRunner = $runner;
+        $runner->start(new Loop(), $src, $tgt, $patterns);
+    }
+
+    /**
+     * Cancel the current compare operation (from cancel button callback).
+     */
+    private function cancelCompare(): void
+    {
+        if ($this->currentRunner) {
+            $this->currentRunner->cancel();
+            $this->currentRunner = null;
+        }
+
+        $this->progressBar->hide();
+        $this->cancelBtn->hide();
+        $this->statusLabel->setText('已取消');
+        $this->enableControlsAfterCompare();
+    }
+
+    private function enableControlsAfterCompare(): void
+    {
+        $this->compareBtn->enable();
+        $this->manageBtn->enable();
+        if (!$this->lastDiff || $this->lastDiff->error) {
+            $this->generateBtn->enable();
+        }
     }
 
     /**
@@ -376,9 +419,11 @@ class MainWindow
         if ($this->lastDiff->removedTables)   $parts[] = '删除表 ' . count($this->lastDiff->removedTables);
         $extra = $this->lastDiff->total();
         foreach (['newIndexes','removedIndexes','newForeignKeys','removedForeignKeys',
-                     'newTriggers','removedTriggers','newViews','removedViews',
-                     'newProcedures','removedProcedures','newFunctions','removedFunctions',
-                     'newEvents','removedEvents'] as $p) {
+                     'newTriggers','removedTriggers','changedTriggers',
+                     'newViews','removedViews','changedViews',
+                     'newProcedures','removedProcedures','changedProcedures',
+                     'newFunctions','removedFunctions','changedFunctions',
+                     'newEvents','removedEvents','changedEvents'] as $p) {
             $extra -= count($this->lastDiff->$p);
         }
         if ($extra > 0) $parts[] = "其他 {$extra}";
@@ -396,14 +441,19 @@ class MainWindow
             $this->lastDiff->removedForeignKeys,
             $this->lastDiff->newTriggers,
             $this->lastDiff->removedTriggers,
+            $this->lastDiff->changedTriggers,
             $this->lastDiff->newViews,
             $this->lastDiff->removedViews,
+            $this->lastDiff->changedViews,
             $this->lastDiff->newProcedures,
             $this->lastDiff->removedProcedures,
+            $this->lastDiff->changedProcedures,
             $this->lastDiff->newFunctions,
             $this->lastDiff->removedFunctions,
+            $this->lastDiff->changedFunctions,
             $this->lastDiff->newEvents,
             $this->lastDiff->removedEvents,
+            $this->lastDiff->changedEvents,
         );
         $resultModel = new \Libui\TableModel($resultDelegate);
         $resultDelegate->setModel($resultModel);
@@ -536,7 +586,7 @@ class MainWindow
 
         $src = $this->getSelectedConnection($this->srcCombo);
         $tgt = $this->getSelectedConnection($this->tgtCombo);
-        $gen = new Generator($src, $tgt, $this->adapter);
+        $gen = new Generator($src, $tgt, $this->adapter, $this->lastDiffSql ?? []);
         $sql = $gen->generate($filtered);
 
         $win = new Window('生成的迁移 SQL', 800, 500);
@@ -784,9 +834,17 @@ class MainWindow
                     foreach ($this->lastDiff->newViews as $t) {
                         if (($t['name'] ?? '') === $name) { $filtered->newViews[] = $t; break; }
                     }
+                } elseif ($type === '变更视图') {
+                    foreach ($this->lastDiff->changedViews as $t) {
+                        if (($t['name'] ?? '') === $name) { $filtered->changedViews[] = $t; break; }
+                    }
                 } elseif ($type === '删除视图') {
                     foreach ($this->lastDiff->removedViews as $t) {
                         if (($t['name'] ?? '') === $name) { $filtered->removedViews[] = $t; break; }
+                    }
+                } elseif ($type === '变更触发器') {
+                    foreach ($this->lastDiff->changedTriggers as $t) {
+                        if (($t['name'] ?? '') === $name) { $filtered->changedTriggers[] = $t; break; }
                     }
                 } elseif ($type === '新增存储过程') {
                     foreach ($this->lastDiff->newProcedures as $t) {
@@ -796,6 +854,10 @@ class MainWindow
                     foreach ($this->lastDiff->removedProcedures as $t) {
                         if (($t['name'] ?? '') === $name) { $filtered->removedProcedures[] = $t; break; }
                     }
+                } elseif ($type === '变更存储过程') {
+                    foreach ($this->lastDiff->changedProcedures as $t) {
+                        if (($t['name'] ?? '') === $name) { $filtered->changedProcedures[] = $t; break; }
+                    }
                 } elseif ($type === '新增函数') {
                     foreach ($this->lastDiff->newFunctions as $t) {
                         if (($t['name'] ?? '') === $name) { $filtered->newFunctions[] = $t; break; }
@@ -803,6 +865,10 @@ class MainWindow
                 } elseif ($type === '删除函数') {
                     foreach ($this->lastDiff->removedFunctions as $t) {
                         if (($t['name'] ?? '') === $name) { $filtered->removedFunctions[] = $t; break; }
+                    }
+                } elseif ($type === '变更函数') {
+                    foreach ($this->lastDiff->changedFunctions as $t) {
+                        if (($t['name'] ?? '') === $name) { $filtered->changedFunctions[] = $t; break; }
                     }
                 } elseif ($type === '新增事件') {
                     foreach ($this->lastDiff->newEvents as $t) {
@@ -812,10 +878,14 @@ class MainWindow
                     foreach ($this->lastDiff->removedEvents as $t) {
                         if (($t['name'] ?? '') === $name) { $filtered->removedEvents[] = $t; break; }
                     }
+                } elseif ($type === '变更事件') {
+                    foreach ($this->lastDiff->changedEvents as $t) {
+                        if (($t['name'] ?? '') === $name) { $filtered->changedEvents[] = $t; break; }
+                    }
                 }
             }
 
-            $gen = new \MySqlSchemaSync\SqlGen\Generator($src, $tgt, $this->adapter);
+            $gen = new \MySqlSchemaSync\SqlGen\Generator($src, $tgt, $this->adapter, $this->lastDiffSql ?? []);
             $sql = $gen->generate($filtered);
         } catch (\Throwable $e) {
             \Yangweijie\Ui2\Dialogs\MessageBox::error($win, '错误', '生成 SQL 失败：' . $e->getMessage());
@@ -838,12 +908,21 @@ class MainWindow
         $btnRow = new \Libui\Box(false);
         $btnRow->setPadded(true);
         $copyBtn = new \Libui\Button('📋 复制到剪贴板');
-        $copyBtn->onClicked(function () use ($text) {
-            $content = $text->getText();
-            $tmpFile = tempnam(sys_get_temp_dir(), 'mss_');
-            file_put_contents($tmpFile, $content);
-            shell_exec("pbcopy < " . escapeshellarg($tmpFile));
-            unlink($tmpFile);
+        $copyBtn->onClicked(function () use ($text, $sqlWin) {
+            $content = $text->text();
+            $ok = false;
+            if (DIRECTORY_SEPARATOR === '\\') {
+                $tmp = tempnam(sys_get_temp_dir(), 'mss_');
+                file_put_contents($tmp, $content);
+                shell_exec('clip < "' . $tmp . '"');
+                @unlink($tmp);
+                $ok = true;
+            } elseif (function_exists('shell_exec')) {
+                $escaped = str_replace("'", "'\\''", $content);
+                shell_exec("echo '{$escaped}' | pbcopy");
+                $ok = true;
+            }
+            \yangweijie\ui2\MessageBox::info($sqlWin, '已复制', $ok ? 'SQL 已复制到剪贴板。' : '复制失败，请手动复制。');
         });
         $btnRow->append($copyBtn, false);
         $sqlBox->append($btnRow, false);

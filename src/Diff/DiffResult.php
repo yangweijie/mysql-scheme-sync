@@ -33,17 +33,27 @@ class DiffResult
     /** @var array<int, array> */
     public array $newViews = [];
     /** @var array<int, array> */
+    public array $changedViews = [];
+    /** @var array<int, array> */
     public array $removedViews = [];
     /** @var array<int, array> */
     public array $newProcedures = [];
+    /** @var array<int, array> */
+    public array $changedProcedures = [];
     /** @var array<int, array> */
     public array $removedProcedures = [];
     /** @var array<int, array> */
     public array $newFunctions = [];
     /** @var array<int, array> */
+    public array $changedFunctions = [];
+    /** @var array<int, array> */
     public array $removedFunctions = [];
     /** @var array<int, array> */
+    public array $changedTriggers = [];
+    /** @var array<int, array> */
     public array $newEvents = [];
+    /** @var array<int, array> */
+    public array $changedEvents = [];
     /** @var array<int, array> */
     public array $removedEvents = [];
 
@@ -54,10 +64,10 @@ class DiffResult
         return count($this->newTables) + count($this->removedTables) + count($this->changedTables)
             + count($this->newIndexes) + count($this->removedIndexes)
             + count($this->newForeignKeys) + count($this->removedForeignKeys)
-            + count($this->newTriggers) + count($this->removedTriggers)
-            + count($this->newViews) + count($this->removedViews)
-            + count($this->newProcedures) + count($this->removedProcedures)
-            + count($this->newFunctions) + count($this->removedFunctions)
-            + count($this->newEvents) + count($this->removedEvents);
+            + count($this->newTriggers) + count($this->removedTriggers) + count($this->changedTriggers)
+            + count($this->newViews) + count($this->removedViews) + count($this->changedViews)
+            + count($this->newProcedures) + count($this->removedProcedures) + count($this->changedProcedures)
+            + count($this->newFunctions) + count($this->removedFunctions) + count($this->changedFunctions)
+            + count($this->newEvents) + count($this->removedEvents) + count($this->changedEvents);
     }
 }

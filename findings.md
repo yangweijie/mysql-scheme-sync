@@ -60,6 +60,39 @@
 - `yangweijie/think-orm-async` — 零 `use` 引用，已移除，连带清理 10 个传递依赖包
 - `nunomaduro/collision` — 代码中无 `use` 引用，但 `yangweijie/ui2/bootstrap.php` 在 runtime 通过 `class_exists()` 触发 autoload 需要它 → 已恢复
 
+## UI 阻塞优化方案（子进程）
+
+### 核心思路
+使用 `proc_open` 启动独立的 PHP CLI 子进程执行数据库比对，主进程通过 `Loop::delay` 轮询状态文件获取进度。消除 UI 阻塞，使取消按钮生效。
+
+### IPC 协议
+临时文件前缀：`{sys_get_temp_dir()}/mss_{pid}_`
+- `status.json`: `{"status":"working|done|error|cancelled", "phase":"...", "progress_pct":50}`
+- `cancel.flag`: 存在即取消（worker 在每次查询批次后检查）
+- `result.bin`: PHP `serialize($diffResult)`
+
+### Worker 流程
+1. `PHP_BINARY` 定位当前 PHP 可执行文件
+2. `proc_open(cmd, pipes, cwd)` 启动，`bypass_shell=true` Windows 兼容
+3. Worker 解析 CLI 参数（JSON 连接信息 + 排除模式 + 文件路径）
+4. Worker 设置 `setOnProgress` 回调写 status.json
+5. Worker 执行 `fetchAll()` → `compare()`，每批次后检查取消标志
+6. Worker 写入 `result.bin` + 更新 status="done" 后退出
+7. 主进程轮询到 status="done" 后读取 result.bin, `unserialize()` 还原 DiffResult
+
+### Loop::repeat vs Loop::delay 自递归
+- 先用 `Loop::repeat(ms, cb)`（libui-ng 的 `uiTimer` 支持重复模式）
+- 若 `Loop::repeat` 不可用，用 `Loop::delay` 自递归：
+  ```php
+  $poll = function() use (&$poll) { /* check */ Loop::delay(200, $poll); };
+  Loop::delay(200, $poll);
+  ```
+
+### 取消机制
+- 取消按钮：`file_put_contents(cancelFlagPath, '1')`
+- Worker 每批查询后：`if (file_exists(cancelFlagPath)) { clean up; exit(1); }`
+- 主进程：检测 worker 退出后清除状态文件
+
 ## 项目架构
 ```
 src/
@@ -70,5 +103,9 @@ src/
 ├── Diff/AsyncStructureFetcher.php — think-orm-async AsyncContext 并发 SHOW CREATE TABLE
 ├── Gui/MainWindow.php           — 主窗口（libui + Loop 调度）
 ├── Gui/DiffTableModelDelegate.php — 差异表格模型
-└── SqlGen/Generator.php         — 迁移 SQL 生成（用库的 diffSql）
+├── Worker/WorkerIPC.php         — IPC 状态文件工具类
+├── SqlGen/Generator.php         — 迁移 SQL 生成（用库的 diffSql）
+bin/
+├── mysql-schema-sync.php        — GUI 入口
+└── compare-worker.php           — CLI 比对子进程入口
 ```

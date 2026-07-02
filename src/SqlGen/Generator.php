@@ -9,15 +9,27 @@ use MySqlSchemaSync\Diff\StructSyncAdapter;
 
 class Generator
 {
+    /** @var array<string, array> Cached diffSql when no live adapter is available */
+    private array $cachedDiffSql = [];
+
+    /**
+     * @param Connection         $source   Source connection (new structure)
+     * @param Connection         $target   Target connection (to be migrated)
+     * @param StructSyncAdapter|null $adapter  Adapter (null when using pre-cached diffSql)
+     * @param array              $diffSql  Pre-cached diffSql array (used when adapter is null)
+     */
     public function __construct(
         private Connection $source,
         private Connection $target,
-        private StructSyncAdapter $adapter,
-    ) {}
+        private ?StructSyncAdapter $adapter = null,
+        array $diffSql = [],
+    ) {
+        $this->cachedDiffSql = $diffSql;
+    }
 
     public function generate(DiffResult $diff, bool $useTransaction = true): string
     {
-        $diffSql = $this->adapter->getDiffSql();
+        $diffSql = $this->adapter ? $this->adapter->getDiffSql() : $this->cachedDiffSql;
         $selectedTables = array_flip(array_column($diff->newTables, 'name'));
         $removedTables = array_flip(array_column($diff->removedTables, 'name'));
 
@@ -109,9 +121,26 @@ class Generator
             }
         }
 
-        foreach (['ADD_VIEW', 'DROP_VIEW', 'ADD_PROCEDURE', 'DROP_PROCEDURE', 'ADD_FUNCTION', 'DROP_FUNCTION', 'ADD_TRIGGER', 'DROP_TRIGGER', 'ADD_EVENT', 'DROP_EVENT'] as $type) {
+        foreach (['ADD_VIEW','MODIFY_VIEW','DROP_VIEW','ADD_PROCEDURE','MODIFY_PROCEDURE','DROP_PROCEDURE','ADD_FUNCTION','MODIFY_FUNCTION','DROP_FUNCTION','ADD_TRIGGER','MODIFY_TRIGGER','DROP_TRIGGER','ADD_EVENT','MODIFY_EVENT','DROP_EVENT'] as $type) {
             if (!empty($diffSql[$type])) {
                 foreach ($diffSql[$type] as $sql) {
+                    if (str_starts_with($type, 'DROP_')) {
+                        // DROP_VIEW/PROCEDURE/FUNCTION/TRIGGER/EVENT → generate DROP statement
+                        $objType = substr($type, 5); // VIEW, PROCEDURE, FUNCTION, TRIGGER, EVENT
+                        $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
+                        $sql = "DROP {$objType} IF EXISTS `{$name}`";
+                    } elseif ($type === 'MODIFY_VIEW') {
+                        // MySQL: CREATE OR REPLACE VIEW for existing views
+                        $sql = preg_replace('/^CREATE\s/', 'CREATE OR REPLACE ', $sql);
+                    } elseif (in_array($type, ['MODIFY_TRIGGER','MODIFY_FUNCTION','MODIFY_PROCEDURE'])) {
+                        // MySQL has no CREATE OR REPLACE for these; DROP + CREATE
+                        $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
+                        $objType = str_replace('MODIFY_', '', $type); // TRIGGER, FUNCTION, PROCEDURE
+                        $sql = "DROP {$objType} IF EXISTS `{$name}`;\n{$sql}";
+                    } elseif ($type === 'MODIFY_EVENT') {
+                        $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
+                        $sql = "DROP EVENT IF EXISTS `{$name}`;\n{$sql}";
+                    }
                     $lines[] = $sql . ";";
                 }
                 $lines[] = "";

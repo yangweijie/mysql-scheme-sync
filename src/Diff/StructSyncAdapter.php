@@ -14,6 +14,10 @@ class StructSyncAdapter
     private bool $cancelled = false;
     private ?\Closure $onProgress = null;
 
+    /** @var ?array<string, array<string, string>> Pre-fetched advanced objects [type][name => sql] */
+    private ?array $prefetchedAdvanceSrc = null;
+    private ?array $prefetchedAdvanceTgt = null;
+
     public function cancel(): void { $this->cancelled = true; }
     public function isCancelled(): bool { return $this->cancelled; }
 
@@ -27,6 +31,27 @@ class StructSyncAdapter
     public function setOnPhase(\Closure $cb): void { /* not supported */ }
 
     /**
+     * Inject pre-fetched table structures (bypasses fetchAll database queries).
+     */
+    public function setFetchedStructs(array $src, array $tgt): void
+    {
+        $this->srcStruct = $src;
+        $this->tgtStruct = $tgt;
+    }
+
+    /**
+     * Inject pre-fetched advanced object results (VIEW/TRIGGER/EVENT/FUNCTION/PROCEDURE).
+     * When set, appendAdvanceDiffSql uses these instead of querying the database.
+     *
+     * Format: ['VIEW' => ['name' => 'CREATE SQL ...'], 'TRIGGER' => [...], ...]
+     */
+    public function setPrefetchedAdvance(array $src, array $tgt): void
+    {
+        $this->prefetchedAdvanceSrc = $src;
+        $this->prefetchedAdvanceTgt = $tgt;
+    }
+
+    /**
      * 异步获取两张库的结构并比对
      */
     public function fetchAll(array $excludePatterns = []): void
@@ -38,8 +63,8 @@ class StructSyncAdapter
         }
 
         // 并发获取两张库的结构（每张库内部并发，两张库顺序执行）
-        $this->srcStruct = $fetcher->fetchStructure($this->source);
-        $this->tgtStruct = $fetcher->fetchStructure($this->target);
+        $this->srcStruct = $fetcher->fetchStructure($this->source, $excludePatterns);
+        $this->tgtStruct = $fetcher->fetchStructure($this->target, $excludePatterns);
     }
 
     public function compare(array $excludePatterns = []): DiffResult
@@ -66,14 +91,17 @@ class StructSyncAdapter
      */
     private function buildDiffSql(): array
     {
-        $src = $this->srcStruct;  // self (目标库，要被修改的)
-        $tgt = $this->tgtStruct;  // refer (源库，参考结构)
+        // $this->srcStruct = srcCombo（用户选的「源库」= 新结构）
+        // $this->tgtStruct = tgtCombo（用户选的「目标库」= 要同步的旧结构）
+        // 方向：让旧结构匹配新结构
+        $src = $this->tgtStruct;  // 旧结构（要被修改的）
+        $tgt = $this->srcStruct;  // 新结构（参考基准）
 
         $res = [];
 
-        // 1. 新增表（在源库有，目标库没有）
+        // 1. 新增表（新结构有、旧结构没有 → 添加）
         $res['ADD_TABLE'] = array_diff($tgt['tables'] ?? [], $src['tables'] ?? []);
-        // 2. 删除表（在目标库有，源库没有）
+        // 2. 删除表（旧结构有、新结构没有 → 删除）
         $res['DROP_TABLE'] = array_diff($src['tables'] ?? [], $tgt['tables'] ?? []);
 
         $srcCols = $src['columns'] ?? [];
@@ -104,11 +132,17 @@ class StructSyncAdapter
         }
 
         // 4. 约束差异
+        // 排除新增/删除表的约束，它们已包含在 CREATE/DROP TABLE 中
+        $addTableKeys = array_flip($res['ADD_TABLE'] ?? []);
+        $dropTableKeys = array_flip($res['DROP_TABLE'] ?? []);
+        $srcConstraints = array_diff_key($src['constraints'] ?? [], $dropTableKeys);
+        $tgtConstraints = array_diff_key($tgt['constraints'] ?? [], $addTableKeys);
+
         $res['DROP_CONSTRAINT'] = self::arrayDiffAssocRecursive(
-            $src['constraints'] ?? [], $tgt['constraints'] ?? []
+            $srcConstraints, $tgt['constraints'] ?? []
         );
         $res['ADD_CONSTRAINT'] = self::arrayDiffAssocRecursive(
-            $tgt['constraints'] ?? [], $src['constraints'] ?? []
+            $tgtConstraints, $src['constraints'] ?? []
         );
 
         // 5. 生成差异 SQL
@@ -125,10 +159,15 @@ class StructSyncAdapter
 
     /**
      * 获取高级对象差异（VIEW/TRIGGER 等）
-     * 列表查询同步 + SHOW CREATE 通过 think-orm-async 并行化
+     * 如果有预获取数据则直接使用，否则查询数据库（think-orm-async 并行化）
      */
     private function appendAdvanceDiffSql(array &$diffSql): void
     {
+        if ($this->prefetchedAdvanceSrc !== null && $this->prefetchedAdvanceTgt !== null) {
+            $this->appendAdvanceFromPrefetched($diffSql);
+            return;
+        }
+
         $advance = [
             'VIEW'      => ["SELECT TABLE_NAME as Name FROM information_schema.VIEWS WHERE TABLE_SCHEMA='#'", 'Create View'],
             'TRIGGER'   => ["SELECT TRIGGER_NAME as Name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='#'", 'SQL Original Statement'],
@@ -144,8 +183,47 @@ class StructSyncAdapter
             $srcObjs = $this->fetchAdvanceObjectsAsync($srcConfig, $this->source->database, $type, $listSql);
             $tgtObjs = $this->fetchAdvanceObjectsAsync($tgtConfig, $this->target->database, $type, $listSql);
 
-            $diffSql['ADD_' . $type] = self::arrayDiffAssocRecursive($tgtObjs, $srcObjs);
-            $diffSql['DROP_' . $type] = self::arrayDiffAssocRecursive($srcObjs, $tgtObjs);
+            $common = array_intersect_key($srcObjs, $tgtObjs);
+            $added  = array_diff_key($srcObjs, $tgtObjs);
+            $dropped = array_diff_key($tgtObjs, $srcObjs);
+
+            $modify = [];
+            foreach ($common as $name => $sql) {
+                if (($tgtObjs[$name] ?? '') !== $sql) {
+                    $modify[$name] = $sql;
+                }
+            }
+
+            $diffSql['ADD_' . $type]    = $added;
+            $diffSql['DROP_' . $type]   = $dropped;
+            if ($modify) $diffSql['MODIFY_' . $type] = $modify;
+        }
+    }
+
+    /**
+     * Diff advanced objects from pre-fetched data (no DB queries).
+     * Properly separates: truly added, truly dropped, and modified (exists in both but definition differs).
+     */
+    private function appendAdvanceFromPrefetched(array &$diffSql): void
+    {
+        foreach (['VIEW', 'TRIGGER', 'EVENT', 'FUNCTION', 'PROCEDURE'] as $type) {
+            $srcObjs = $this->prefetchedAdvanceSrc[$type] ?? [];
+            $tgtObjs = $this->prefetchedAdvanceTgt[$type] ?? [];
+
+            $common = array_intersect_key($srcObjs, $tgtObjs);
+            $added  = array_diff_key($srcObjs, $tgtObjs);
+            $dropped = array_diff_key($tgtObjs, $srcObjs);
+
+            $modify = [];
+            foreach ($common as $name => $sql) {
+                if (($tgtObjs[$name] ?? '') !== $sql) {
+                    $modify[$name] = $sql;
+                }
+            }
+
+            $diffSql['ADD_' . $type]    = $added;
+            $diffSql['DROP_' . $type]   = $dropped;
+            if ($modify) $diffSql['MODIFY_' . $type] = $modify;
         }
     }
 
@@ -274,40 +352,38 @@ class StructSyncAdapter
             if (preg_match('/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?/i', $sql, $m))
                 $d->removedTables[] = ['name' => $m[1], 'risk' => DiffResult::RISK_HIGH];
         }
-        foreach ($this->diffSql['MODIFY_FIELD'] ?? [] as $table => $fields) {
-            $changes = [];
-            foreach ($fields as $col => $def)
-                $changes[] = ['kind' => 'MODIFY_COLUMN', 'risk' => DiffResult::RISK_WARN, 'column' => $col, 'detail' => $def];
-            if ($changes) $d->changedTables[] = ['name' => $table, 'risk' => DiffResult::RISK_WARN, 'changes' => $changes];
-        }
-        foreach ($this->diffSql['ADD_FIELD'] ?? [] as $table => $fields) {
-            $changes = [];
-            foreach ($fields as $col => $def)
-                $changes[] = ['kind' => 'ADD_COLUMN', 'risk' => DiffResult::RISK_SAFE, 'column' => $col, 'detail' => $def];
-            if ($changes) {
-                $merged = false;
-                foreach ($d->changedTables as &$ct) {
-                    if ($ct['name'] === $table) { $ct['changes'] = array_merge($ct['changes'], $changes); $merged = true; break; }
-                }
-                unset($ct);
-                if (!$merged) $d->changedTables[] = ['name' => $table, 'risk' => DiffResult::RISK_SAFE, 'changes' => $changes];
+        // diffSql contains flat SQL strings: parse them back to structured data
+        // MODIFY_FIELD: ALTER TABLE `t` MODIFY `col` definition
+        foreach ($this->diffSql['MODIFY_FIELD'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+MODIFY\s+`(\w+)`\s+(.*)/is", $sql, $m)) {
+                $table = $m[1]; $col = $m[2]; $def = $m[3];
+                $d->changedTables[$table]['name'] = $table;
+                $d->changedTables[$table]['risk'] = DiffResult::RISK_WARN;
+                $d->changedTables[$table]['changes'][] = ['kind' => 'MODIFY_COLUMN', 'risk' => DiffResult::RISK_WARN, 'column' => $col, 'detail' => $def];
             }
         }
-        foreach ($this->diffSql['DROP_FIELD'] ?? [] as $table => $fields) {
-            $changes = [];
-            foreach ($fields as $col => $def)
-                $changes[] = ['kind' => 'DROP_COLUMN', 'risk' => DiffResult::RISK_HIGH, 'column' => $col];
-            if ($changes) {
-                $merged = false;
-                foreach ($d->changedTables as &$ct) {
-                    if ($ct['name'] === $table) { $ct['changes'] = array_merge($ct['changes'], $changes); $merged = true; break; }
-                }
-                unset($ct);
-                if (!$merged) $d->changedTables[] = ['name' => $table, 'risk' => DiffResult::RISK_HIGH, 'changes' => $changes];
+        // ADD_FIELD: ALTER TABLE `t` ADD `col` definition
+        foreach ($this->diffSql['ADD_FIELD'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+`(\w+)`\s+(.*)/is", $sql, $m)) {
+                $table = $m[1]; $col = $m[2]; $def = $m[3];
+                $d->changedTables[$table]['name'] = $table;
+                $d->changedTables[$table]['risk'] = DiffResult::RISK_SAFE;
+                $d->changedTables[$table]['changes'][] = ['kind' => 'ADD_COLUMN', 'risk' => DiffResult::RISK_SAFE, 'column' => $col, 'detail' => $def];
             }
         }
-        foreach (['ADD_VIEW'=>'newViews','DROP_VIEW'=>'removedViews','ADD_PROCEDURE'=>'newProcedures','DROP_PROCEDURE'=>'removedProcedures','ADD_FUNCTION'=>'newFunctions','DROP_FUNCTION'=>'removedFunctions','ADD_TRIGGER'=>'newTriggers','DROP_TRIGGER'=>'removedTriggers','ADD_EVENT'=>'newEvents','DROP_EVENT'=>'removedEvents'] as $type => $prop) {
-            $risk = str_starts_with($type, 'ADD') ? DiffResult::RISK_SAFE : DiffResult::RISK_HIGH;
+        // DROP_FIELD: ALTER TABLE `t` DROP `col`
+        foreach ($this->diffSql['DROP_FIELD'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+`(\w+)`/is", $sql, $m)) {
+                $table = $m[1]; $col = $m[2];
+                $d->changedTables[$table]['name'] = $table;
+                $d->changedTables[$table]['risk'] = DiffResult::RISK_HIGH;
+                $d->changedTables[$table]['changes'][] = ['kind' => 'DROP_COLUMN', 'risk' => DiffResult::RISK_HIGH, 'column' => $col];
+            }
+        }
+        // Normalize changedTables from temp keyed array to sequential
+        $d->changedTables = array_values($d->changedTables);
+        foreach (['ADD_VIEW'=>'newViews','MODIFY_VIEW'=>'changedViews','DROP_VIEW'=>'removedViews','ADD_PROCEDURE'=>'newProcedures','MODIFY_PROCEDURE'=>'changedProcedures','DROP_PROCEDURE'=>'removedProcedures','ADD_FUNCTION'=>'newFunctions','MODIFY_FUNCTION'=>'changedFunctions','DROP_FUNCTION'=>'removedFunctions','ADD_TRIGGER'=>'newTriggers','MODIFY_TRIGGER'=>'changedTriggers','DROP_TRIGGER'=>'removedTriggers','ADD_EVENT'=>'newEvents','MODIFY_EVENT'=>'changedEvents','DROP_EVENT'=>'removedEvents'] as $type => $prop) {
+            $risk = str_starts_with($type, 'ADD') ? DiffResult::RISK_SAFE : (str_starts_with($type, 'MODIFY') ? DiffResult::RISK_WARN : DiffResult::RISK_HIGH);
             foreach ($this->diffSql[$type] ?? [] as $sql) {
                 $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : null;
                 if ($name) $d->{$prop}[] = ['name' => $name, 'risk' => $risk];

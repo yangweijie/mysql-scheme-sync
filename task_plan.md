@@ -34,8 +34,15 @@
 - [x] fetchAll 传排除模式给库（SQL 层过滤生效）
 
 ### Phase 4: 待改进 ⬜
-- [ ] 比对期间 UI 完全不阻塞（需要 pcntl_fork 或其他异步方案）
-- [ ] 取消按钮实际生效（库的同步调用期间无法中断）
+- [x] 比对期间 UI 完全不阻塞（子进程方案）
+- [x] 取消按钮实际生效（子进程方案）
+
+### Phase 8: UI 阻塞优化 ⬜
+- [ ] 创建 `bin/compare-worker.php` — CLI 子进程入口（解析参数、运行比对、写状态文件）
+- [ ] 创建 `src/Worker/WorkerIPC.php` — 状态文件读写工具类
+- [ ] 修改 `MainWindow::onCompare()` — 用 proc_open 启动子进程 + Loop::delay 轮询
+- [ ] 修改取消按钮逻辑 — 写入取消标志文件而非调用 adapter->cancel()
+- [ ] 验证：比对期间 UI 流畅、进度条更新、取消按钮有效
 
 ### Phase 5: 文档 ✅
 - [x] 创建 AGENTS.md — 为 OpenCode 会话编制的紧凑指令文件

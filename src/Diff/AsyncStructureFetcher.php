@@ -20,8 +20,10 @@ class AsyncStructureFetcher
     /**
      * 并发获取单个数据库的结构
      * 返回与 DDZH\MysqlStructSync::getStructure() 相同格式的结构数组
+     *
+     * @param array $excludePatterns Glob 模式表名排除列表，如 ['*_bak', 'tmp_*']
      */
-    public function fetchStructure(Connection $dbConfig): array
+    public function fetchStructure(Connection $dbConfig, array $excludePatterns = []): array
     {
         // 1. 获取表列表（同步，只有1次查询）
         $mysqli = $this->connect($dbConfig);
@@ -31,6 +33,18 @@ class AsyncStructureFetcher
             $tables[] = $row['Name'];
         }
         $mysqli->close();
+
+        // 1b. 应用排除过滤（glob 模式通过 fnmatch 匹配）
+        if (!empty($excludePatterns)) {
+            $tables = array_values(array_filter($tables, function (string $name) use ($excludePatterns): bool {
+                foreach ($excludePatterns as $pattern) {
+                    if (fnmatch($pattern, $name)) {
+                        return false;
+                    }
+                }
+                return true;
+            }));
+        }
 
         if (empty($tables)) {
             return ['tables' => [], 'columns' => [], 'show_create' => [], 'constraints' => []];

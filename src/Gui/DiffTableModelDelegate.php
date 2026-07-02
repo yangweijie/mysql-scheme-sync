@@ -42,14 +42,19 @@ class DiffTableModelDelegate extends TableModelDelegate
         array $removedForeignKeys,
         array $newTriggers,
         array $removedTriggers,
+        array $changedTriggers,
         array $newViews,
         array $removedViews,
+        array $changedViews,
         array $newProcedures,
         array $removedProcedures,
+        array $changedProcedures,
         array $newFunctions,
         array $removedFunctions,
+        array $changedFunctions,
         array $newEvents,
         array $removedEvents,
+        array $changedEvents,
     ): void {
         $this->rows = [];
 
@@ -72,14 +77,19 @@ class DiffTableModelDelegate extends TableModelDelegate
             ['type' => '删除外键',     'items' => $removedForeignKeys,'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $removedTableNames],
             ['type' => '新增触发器',   'items' => $newTriggers,      'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $newTableNames],
             ['type' => '删除触发器',   'items' => $removedTriggers,  'detailFn' => fn($i) => 'on ' . ($i['table'] ?? ''), 'childOf' => fn($i) => $i['table'] ?? '', 'parentSet' => $removedTableNames],
+            ['type' => '变更触发器',   'items' => $changedTriggers,  'detailFn' => fn($i) => ''],
             ['type' => '新增视图',     'items' => $newViews,         'detailFn' => fn($i) => ''],
             ['type' => '删除视图',     'items' => $removedViews,     'detailFn' => fn($i) => ''],
+            ['type' => '变更视图',     'items' => $changedViews,     'detailFn' => fn($i) => ''],
             ['type' => '新增存储过程', 'items' => $newProcedures,    'detailFn' => fn($i) => ''],
             ['type' => '删除存储过程', 'items' => $removedProcedures,'detailFn' => fn($i) => ''],
+            ['type' => '变更存储过程', 'items' => $changedProcedures,'detailFn' => fn($i) => ''],
             ['type' => '新增函数',     'items' => $newFunctions,     'detailFn' => fn($i) => ''],
             ['type' => '删除函数',     'items' => $removedFunctions, 'detailFn' => fn($i) => ''],
+            ['type' => '变更函数',     'items' => $changedFunctions, 'detailFn' => fn($i) => ''],
             ['type' => '新增事件',     'items' => $newEvents,        'detailFn' => fn($i) => ''],
             ['type' => '删除事件',     'items' => $removedEvents,    'detailFn' => fn($i) => ''],
+            ['type' => '变更事件',     'items' => $changedEvents,    'detailFn' => fn($i) => ''],
         ];
 
         foreach ($sections as $sec) {
@@ -202,7 +212,12 @@ class DiffTableModelDelegate extends TableModelDelegate
     {
         $parts = [];
         foreach ($changes as $c) {
-            $parts[] = ($c['kind'] ?? '') . ':' . ($c['column'] ?? '');
+            $detail = $c['detail'] ?? '';
+            // Truncate very long definitions for display
+            if (strlen($detail) > 60) {
+                $detail = substr($detail, 0, 57) . '...';
+            }
+            $parts[] = ($c['column'] ?? '') . ': ' . ($detail ?: ($c['kind'] ?? ''));
         }
         return implode(', ', $parts);
     }
