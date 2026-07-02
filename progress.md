@@ -5,6 +5,7 @@
 - 进度条按阶段独立显示（查询表 → 查询视图 → ... → 比较中）
 - SQL 层排除过滤已启用
 - fetchAll 传排除模式给库
+- 创建了 AGENTS.md（针对新 OpenCode 会话的紧凑指令文件）
 
 ## 已修改文件
 | 文件 | 改动 |
@@ -17,6 +18,7 @@
 | `src/Gui/DiffTableModelDelegate.php` | 隐藏新建/删除表的子项 |
 | `src/SqlGen/Generator.php` | 用库 diffSql 输出生成 SQL |
 | `vendor/9raxdev/mysql-struct-sync/MysqlStructSync.php` | 拆分方法 + 排除过滤 + 进度回调 |
+| `AGENTS.md` | 新建——OpenCode 新会话的快速入门指令 |
 
 ## 待解决问题
 1. 比对期间 UI 阻塞（PHP 单线程 + 库同步调用限制）
