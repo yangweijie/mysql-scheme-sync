@@ -17,6 +17,9 @@
     "autoload": {
         "psr-4": {
             "MySqlSchemaSync\\": "src/"
-        }
+        },
+        "classmap": [
+            "vendor/yangweijie/think-orm-async/src/think/"
+        ]
     }
 }

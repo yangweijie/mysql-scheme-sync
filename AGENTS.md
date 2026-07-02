@@ -27,11 +27,9 @@ src/
   Config/Connection.php          # 连接数据类（id/name/host/port/user/password/database）
   Config/ConfigStore.php         # 连接管理 + AES-256-GCM 加密持久化到 ~/.mysql-schema-sync/
   Diff/DiffResult.php            # 差异结果纯数据结构（17 种差异类型的 array）
-  Diff/StructSyncAdapter.php     # 包装 9raxdev/mysql-struct-sync 库（fetchAll → compare）
-  Diff/AsyncStructureFetcher.php # 基于 MYSQLI_ASYNC + mysqli_poll 的并发 SHOW CREATE TABLE
-  Diff/Schema.php                # 旧的 INFORMATION_SCHEMA 手工比对（已废弃，未删除）
-  Gui/MainWindow.php             # 主窗口：连接选择 + 比对触发 + 迁移 SQL 生成
-  Gui/ConnectionWindow.php       # 连接管理弹窗（增删改查、导入导出、测试连接）
+  Diff/StructSyncAdapter.php     # 比对逻辑：fetchStructures → buildDiffSql（含 5 种高级对象）
+  Diff/AsyncStructureFetcher.php # 基于 think-orm-async 的并发 SHOW CREATE TABLE
+  Gui/MainWindow.php             # 主窗口：连接选择 + 比对触发 + 迁移 SQL 生成（含内联连接管理 UI）
   Gui/DiffTableModelDelegate.php # 差异表格的 TableModelDelegate（可勾选行）
   SqlGen/Generator.php           # 基于 diffSql 生成最终迁移 SQL
 ```
@@ -56,10 +54,12 @@ src/
 - `ProgressBar::setValue(-1)` = 不确定模式（来回滚动）
 - 取消按钮在同步比对期间无效（库调用无法中断）
 
-### 异步并发查询（AsyncStructureFetcher）
-- 每张库内部的 `SHOW CREATE TABLE` 通过 `MYSQLI_ASYNC` + `mysqli_poll` 并发执行
-- 默认每批 50 个表，每批内所有表并发
+### 异步并发查询（AsyncStructureFetcher + think-orm-async）
+- 每张库内部的 `SHOW CREATE TABLE` 通过 `yangweijie/think-orm-async` 的 `AsyncContext::start()/query()/end()` 并行执行
+- 默认每批 50 个表，每批内所有表通过 `AsyncContext` 单连接并行查询
+- 每个批次使用 1 个连接（vs 旧版每个表 1 个连接，大幅降低连接开销）
 - 两个数据库之间的查询是顺序的（不是真正的双库并发）
+- 高级对象（VIEW/TRIGGER/EVENT/FUNCTION/PROCEDURE）的 SHOW CREATE 查询同样通过 `AsyncContext` 并行化
 
 ### 排除表过滤
 - 用户输入逗号分隔的 glob 模式（如 `*_bak, *_backup*, tmp_*`）
@@ -86,7 +86,7 @@ src/
 | UI 卡死 | 同步数据库查询阻塞主线程 | 已知限制，无法完全解决 |
 | 连接 ID 冲突 | 之前用 name 做 ID | 已改为 `random_bytes(8)` hex |
 | 库方法缺失 | 1.0.3 原始版无排除过滤 | 修改了 `vendor/9raxdev/mysql-struct-sync/MysqlStructSync.php` 添加方法 |
-| Schema.php 中的代码 | 旧的自实现比对，已废弃 | 保留未删除 |
+| Schema.php 中的代码 | 旧的自实现比对，已废弃 | 已删除 |
 | MainWindow 有大量重复代码 | `buildFilteredDiff` 和 `generateSqlFromDelegate` 做类似的事 | 已用 `buildFilteredDiffFromDelegate` 但仍有重复 |
 
 ## 依赖库
@@ -105,7 +105,6 @@ src/
 
 ## 技术债务
 
-- 废弃的 `src/Diff/Schema.php` 应清理
 - `Generator` 主要依赖 `adapter->getDiffSql()` 做 SQL 生成，间接依赖多
 - `MainWindow` 两个不同路径（主窗口内嵌 table 和弹出新窗口）有大量重复逻辑
 - 无法测试：没有 mock 数据库连接的测试设施

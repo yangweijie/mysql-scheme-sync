@@ -40,6 +40,23 @@
 ### Phase 5: 文档 ✅
 - [x] 创建 AGENTS.md — 为 OpenCode 会话编制的紧凑指令文件
 
+### Phase 6: 死代码清理 ✅
+- [x] `src/Diff/Schema.php` — 删除废弃的 244 行手工比对类（零引用）
+- [x] `src/Gui/ConnectionWindow.php` — 删除废弃的 249 行连接管理窗口（new 了但 show() 从未调用）
+- [x] `MainWindow::buildFilteredDiffFromDelegate()` — 删除 100 行死方法（零次调用）
+- [x] `AsyncStructureFetcher::fetchStructuresInParallel()` — 删除死方法（零次调用）
+- [x] `DiffResult::PHASE_FETCH_TARGET` — 删除未使用常量
+- [x] `composer.json` — 移除并恢复 `yangweijie/think-orm-async` 依赖（清理 10 个传递依赖包）
+- [x] `nunomaduro/collision` — 确认 `yangweijie/ui2/bootstrap.php` 运行时依赖，已恢复
+
+### Phase 7: think-orm-async 性能优化 ✅
+- [x] 重新安装 `yangweijie/think-orm-async` ^1.0
+- [x] `AsyncStructureFetcher` — 用 `AsyncContext` 替换手工 `MYSQLI_ASYNC`（清理 58→22 行代码）
+- [x] `StructSyncAdapter::appendAdvanceDiffSql()` — 用 `AsyncContext` 批量并行化高级对象 SHOW CREATE 查询
+- [x] Vendor 修补：PHP 8.5 兼容性（`?string` 可空类型 + `:mixed` 协变返回类型）
+- [x] `think\Collection` 轻量存根（移除 think-orm-async 对 ThinkPHP 的依赖）
+- [x] `composer.json` — 添加 `classmap` autoload 加载 `think\Collection` 存根
+
 ## 技术决策
 | 决策 | 原因 |
 |------|------|
@@ -48,6 +65,9 @@
 | Generator 直接用库的 diffSql | 库生成的 SQL 已含完整定义 |
 | 交换 source/target 传给库 | 库的 ADD/DROP 方向与用户预期相反 |
 | SQL 层排除过滤 | 加速初始列表查询，减少无用 SHOW CREATE |
+| 用 `AsyncContext` 替代手工 `MYSQLI_ASYNC` | 代码更简洁，复用库的重试/超时逻辑 |
+| 高级对象 SHOW CREATE 用 AsyncContext 并行化 | 消除串行 N+1 查询，减小延迟 |
+| `think\Collection` 轻量存根 | think-orm-async 运行时需要，但无 ThinkPHP 依赖 |
 
 ## 错误记录
 | 错误 | 原因 | 修复 |

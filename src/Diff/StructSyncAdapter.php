@@ -2,6 +2,7 @@
 namespace MySqlSchemaSync\Diff;
 
 use MySqlSchemaSync\Config\Connection;
+use Yangweijie\ThinkOrmAsync\AsyncContext;
 
 class StructSyncAdapter
 {
@@ -18,7 +19,6 @@ class StructSyncAdapter
 
     public function __construct(Connection $source, Connection $target)
     {
-        // 保存连接配置，供 fetchStructures 使用
         $this->source = $source;
         $this->target = $target;
     }
@@ -125,11 +125,10 @@ class StructSyncAdapter
 
     /**
      * 获取高级对象差异（VIEW/TRIGGER 等）
-     * 需要与数据库交互获取 SHOW CREATE，这里简化：跳过或串行获取
+     * 列表查询同步 + SHOW CREATE 通过 think-orm-async 并行化
      */
     private function appendAdvanceDiffSql(array &$diffSql): void
     {
-        // 高级对象暂时串行获取（这些对象数量少，影响不大）
         $advance = [
             'VIEW'      => ["SELECT TABLE_NAME as Name FROM information_schema.VIEWS WHERE TABLE_SCHEMA='#'", 'Create View'],
             'TRIGGER'   => ["SELECT TRIGGER_NAME as Name FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='#'", 'SQL Original Statement'],
@@ -138,33 +137,50 @@ class StructSyncAdapter
             'PROCEDURE' => ["SHOW PROCEDURE STATUS WHERE Db='#'", 'Create Procedure'],
         ];
 
-        $srcMysqli = $this->createMysqli($this->source);
-        $tgtMysqli = $this->createMysqli($this->target);
+        $srcConfig = AsyncStructureFetcher::buildAsyncConfig($this->source);
+        $tgtConfig = AsyncStructureFetcher::buildAsyncConfig($this->target);
 
         foreach ($advance as $type => $listSql) {
-            $srcObjs = $this->fetchAdvanceObjects($srcMysqli, $this->source->database, $type, $listSql);
-            $tgtObjs = $this->fetchAdvanceObjects($tgtMysqli, $this->target->database, $type, $listSql);
+            $srcObjs = $this->fetchAdvanceObjectsAsync($srcConfig, $this->source->database, $type, $listSql);
+            $tgtObjs = $this->fetchAdvanceObjectsAsync($tgtConfig, $this->target->database, $type, $listSql);
 
             $diffSql['ADD_' . $type] = self::arrayDiffAssocRecursive($tgtObjs, $srcObjs);
             $diffSql['DROP_' . $type] = self::arrayDiffAssocRecursive($srcObjs, $tgtObjs);
         }
-
-        $srcMysqli->close();
-        $tgtMysqli->close();
     }
 
-    private function fetchAdvanceObjects(\mysqli $conn, string $dbName, string $type, array $listSql): array
+    private function fetchAdvanceObjectsAsync(array $config, string $dbName, string $type, array $listSql): array
     {
+        $conn = new \mysqli(
+            $config['hostname'], $config['username'], $config['password'],
+            $config['database'], $config['hostport']
+        );
+        if ($conn->connect_error) return [];
+        $conn->set_charset($config['charset']);
+
         $sql = str_replace('#', $dbName, $listSql[0]);
         $result = $conn->query($sql);
-        if (!$result) return [];
+        $names = [];
+        if ($result) {
+            while ($row = $result->fetch_assoc()) {
+                $names[] = $row['Name'];
+            }
+        }
+        $conn->close();
+
+        if (empty($names)) return [];
+
+        AsyncContext::start(null, $config);
+        foreach ($names as $name) {
+            AsyncContext::query("SHOW CREATE {$type} `{$name}`", $name);
+        }
+        $rawResults = AsyncContext::end();
 
         $objects = [];
-        while ($row = $result->fetch_assoc()) {
-            $name = $row['Name'];
-            $showCreate = $conn->query("SHOW CREATE {$type} `{$name}`");
-            if ($showCreate) {
-                $createSql = $showCreate->fetch_assoc()[$listSql[1]] ?? '';
+        foreach ($names as $name) {
+            $data = $rawResults[$name] ?? [];
+            $createSql = $data[0][$listSql[1]] ?? '';
+            if ($createSql) {
                 $objects[$name] = preg_replace('/DEFINER=[^\s]*/', '', $createSql);
             }
         }
@@ -298,14 +314,6 @@ class StructSyncAdapter
             }
         }
         return $d;
-    }
-
-    private function createMysqli(Connection $dbConfig): \mysqli
-    {
-        $conn = new \mysqli($dbConfig->host, $dbConfig->user, $dbConfig->password, $dbConfig->database, $dbConfig->port);
-        if ($conn->connect_error) throw new \RuntimeException("DB connection failed: " . $conn->connect_error);
-        $conn->set_charset('utf8mb4');
-        return $conn;
     }
 
     public function getDiffSql(): array { return $this->diffSql; }

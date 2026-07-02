@@ -2,9 +2,10 @@
 namespace MySqlSchemaSync\Diff;
 
 use MySqlSchemaSync\Config\Connection;
+use Yangweijie\ThinkOrmAsync\AsyncContext;
 
 /**
- * 使用 think-orm-async 并发获取数据库结构
+ * 使用 yangweijie/think-orm-async 并发获取数据库结构
  * 替代 DDZH\MysqlStructSync::getStructure() 的串行查询
  */
 class AsyncStructureFetcher
@@ -35,102 +36,42 @@ class AsyncStructureFetcher
             return ['tables' => [], 'columns' => [], 'show_create' => [], 'constraints' => []];
         }
 
-        // 2. 并发获取所有表的 SHOW CREATE TABLE
         $allResults = $this->fetchCreateTablesAsync($dbConfig, $tables);
 
         // 3. 解析结果，生成与 MysqlStructSync::getStructure() 相同格式
         return $this->parseStructureResults($tables, $allResults);
     }
 
-    /**
-     * 并发获取两张数据库的结构（两个数据库同时获取）
-     */
-    public function fetchStructuresInParallel(Connection $srcConfig, Connection $tgtConfig): array
-    {
-        // 用两个进程/协程并发获取，这里用简单的顺序获取但每个DB内部是并发的
-        // 真正的双DB并发需要用 pthreads 或 Swoole，这里先优化单DB内部的并发
-        $srcStruct = $this->fetchStructure($srcConfig);
-        $tgtStruct = $this->fetchStructure($tgtConfig);
-        return [$srcStruct, $tgtStruct];
-    }
-
-    /**
-     * 分批并发执行 SHOW CREATE TABLE
-     */
     private function fetchCreateTablesAsync(Connection $dbConfig, array $tables): array
     {
-        $config = $this->buildMysqliConfig($dbConfig);
+        $config = $this->buildAsyncConfig($dbConfig);
         $allResults = [];
 
-        // 分批，每批并发执行
         $batches = array_chunk($tables, $this->batchSize);
 
         foreach ($batches as $batch) {
-            $batchResults = $this->executeBatchAsync($config, $batch);
+            $batchResults = $this->executeBatchWithAsyncContext($config, $batch);
             $allResults = array_merge($allResults, $batchResults);
         }
 
         return $allResults;
     }
 
-    /**
-     * 对一批表并发执行 SHOW CREATE TABLE
-     */
-    private function executeBatchAsync(array $config, array $tables): array
+    private function executeBatchWithAsyncContext(array $config, array $tables): array
     {
-        $connections = [];
-        $connMap     = [];   // key => mysqli connection
-        $results     = [];
+        AsyncContext::start(null, $config);
 
-        // 为每个表创建一个异步连接并发送查询
         foreach ($tables as $table) {
-            $conn = $this->createMysqliConnection($config);
-            $sql  = "SHOW CREATE TABLE `{$table}`";
-            $conn->query($sql, MYSQLI_ASYNC);
-            $connections[$table] = $conn;
-            $connMap[$table]     = $conn;
+            $sql = "SHOW CREATE TABLE `{$table}`";
+            AsyncContext::query($sql, $table);
         }
 
-        // 用 mysqli_poll 等待所有查询完成
-        $pending = $connections;
-        $timeout = 30;
-        $startTime = time();
+        $rawResults = AsyncContext::end();
 
-        while (count($pending) > 0 && (time() - $startTime) < $timeout) {
-            $read   = $pending;
-            $error  = $reject = [];
-
-            $ready = mysqli_poll($read, $error, $reject, 0, 100000);
-
-            if ($ready > 0) {
-                foreach ($read as $conn) {
-                    $key = array_search($conn, $connMap, true);
-                    if ($key !== false) {
-                        $result = $conn->reap_async_query();
-                        if ($result) {
-                            $row = $result->fetch_assoc();
-                            $results[$key] = $row['Create Table'] ?? '';
-                            $result->free();
-                        } else {
-                            $results[$key] = '';
-                        }
-                        unset($pending[$key]);
-                    }
-                }
-            }
-
-            foreach ($error as $conn) {
-                $key = array_search($conn, $connMap, true);
-                if ($key !== false) {
-                    $results[$key] = '';
-                    unset($pending[$key]);
-                }
-            }
-        }
-
-        // 关闭所有连接
-        foreach ($connections as $conn) {
-            $conn->close();
+        $results = [];
+        foreach ($tables as $table) {
+            $data = $rawResults[$table] ?? [];
+            $results[$table] = $data[0]['Create Table'] ?? '';
         }
 
         return $results;
@@ -157,14 +98,12 @@ class AsyncStructureFetcher
             $sql = $createTableResults[$table] ?? '';
             if (!$sql) continue;
 
-            // 解析列定义
             preg_match_all('/^\s+[`]([^`]*)`.*?$/m', $sql, $key_value);
             $alert_columns[$table] = array_combine(
                 $key_value[1],
                 array_map(fn($item) => trim(rtrim($item, ',')), $key_value[0])
             );
 
-            // 解析约束（索引/主键）
             preg_match_all($pattern, $sql, $matches);
             $constraints[$table] = array_map(fn($item) => trim(rtrim($item, ',')), $matches[0]);
 
@@ -200,23 +139,7 @@ class AsyncStructureFetcher
         return $conn;
     }
 
-    private function createMysqliConnection(array $config): \mysqli
-    {
-        $conn = new \mysqli(
-            $config['hostname'],
-            $config['username'],
-            $config['password'],
-            $config['database'],
-            $config['hostport']
-        );
-        if ($conn->connect_error) {
-            throw new \RuntimeException("Async DB connection failed: " . $conn->connect_error);
-        }
-        $conn->set_charset($config['charset']);
-        return $conn;
-    }
-
-    private function buildMysqliConfig(Connection $dbConfig): array
+    public static function buildAsyncConfig(Connection $dbConfig): array
     {
         return [
             'hostname' => $dbConfig->host,
