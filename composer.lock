@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "54f2d8b6cf4a07184dd54d9bacc889a6",
+    "content-hash": "68731c471c1c42154ce9d6e96d9799bc",
     "packages": [
         {
             "name": "9raxdev/mysql-struct-sync",
@@ -2881,6 +2881,47 @@
                 }
             ],
             "time": "2026-04-26T05:33:54+00:00"
+        },
+        {
+            "name": "yangweijie/think-orm-async",
+            "version": "v1.0.1",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/yangweijie/ThinkOrmAsync.git",
+                "reference": "ab60301064e627f5d1ccb01702ed3d8ceb78e663"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/yangweijie/ThinkOrmAsync/zipball/ab60301064e627f5d1ccb01702ed3d8ceb78e663",
+                "reference": "ab60301064e627f5d1ccb01702ed3d8ceb78e663",
+                "shasum": ""
+            },
+            "require-dev": {
+                "mockery/mockery": "^1.6",
+                "pestphp/pest": "^2.0"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Yangweijie\\ThinkOrmAsync\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "yangweijie",
+                    "email": "917647288@qq.com"
+                }
+            ],
+            "description": "think-orm 异步并行执行扩展",
+            "support": {
+                "issues": "https://github.com/yangweijie/ThinkOrmAsync/issues",
+                "source": "https://github.com/yangweijie/ThinkOrmAsync/tree/v1.0.1"
+            },
+            "time": "2026-02-24T00:39:36+00:00"
         },
         {
             "name": "yangweijie/ui2",

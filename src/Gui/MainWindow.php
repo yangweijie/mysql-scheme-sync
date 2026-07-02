@@ -354,7 +354,6 @@ class MainWindow
     {
         $this->generateBtn->enable();
 
-        // ✅ Use lastDiff->total() — it's already computed in onCompare()
         $total = $this->lastDiff->total();
         if ($total === 0) {
             \Yangweijie\Ui2\Dialogs\MessageBox::info($this->window, '无差异', '源库和目标库结构完全一致，无需迁移。');
@@ -362,18 +361,15 @@ class MainWindow
             return;
         }
 
-        // ✅ Create a NEW window — Table will be created with data before show()
         $win = new \Libui\Window("比对结果 — {$src->name} → {$tgt->name}", 1000, 650, true);
         $win->setMargined(true);
         $win->centered();
-        $win->onClosing(function () {
-            return true;
-        });
+        $win->onClosing(function () { return true; });
 
         $vbox = new \Libui\Box(true);
         $vbox->setPadded(true);
 
-        // Summary
+        // Summary text
         $parts = [];
         if ($this->lastDiff->newTables)      $parts[] = '新增表 ' . count($this->lastDiff->newTables);
         if ($this->lastDiff->changedTables)   $parts[] = '变更表 ' . count($this->lastDiff->changedTables);
@@ -387,9 +383,8 @@ class MainWindow
         }
         if ($extra > 0) $parts[] = "其他 {$extra}";
         $summaryText = "{$src->name} → {$tgt->name}  |  " . implode(' / ', $parts);
-        $vbox->append(new \Libui\Label($summaryText), false);
 
-        // ✅ Create FRESH delegate WITH data (before show())
+        // ✅ Create delegate WITH data FIRST (before button callbacks)
         $resultDelegate = new DiffTableModelDelegate();
         $resultDelegate->loadDiffs(
             $this->lastDiff->newTables,
@@ -411,10 +406,36 @@ class MainWindow
             $this->lastDiff->removedEvents,
         );
         $resultModel = new \Libui\TableModel($resultDelegate);
-
-        // ✅ Keep model/delegate alive (prevent uiFreeTableModel bug)
+        $resultDelegate->setModel($resultModel);
         $this->resultModels[] = [$resultModel, $resultDelegate, $win];
 
+        // === Top bar: summary (left) + action buttons (right), same row, no stretch ===
+        $topBar = new \Libui\Box(false);
+        $topBar->setPadded(true);
+
+        $summaryLabel = new \Libui\Label($summaryText);
+        $topBar->append($summaryLabel, false);  // label: auto width, not stretchy
+
+        $selectAllBtn = new \Libui\Button('☑ 全选');
+        $selectAllBtn->onClicked(function () use ($resultDelegate) {
+            $resultDelegate->setAllChecked(true);
+        });
+        $deselectAllBtn = new \Libui\Button('☐ 取消');
+        $deselectAllBtn->onClicked(function () use ($resultDelegate) {
+            $resultDelegate->setAllChecked(false);
+        });
+        $safeOnlyBtn = new \Libui\Button('🟢 仅SAFE');
+        $safeOnlyBtn->onClicked(function () use ($resultDelegate) {
+            $resultDelegate->setCheckedByRisk('SAFE', true);
+            foreach (['WARN', 'HIGH'] as $r) $resultDelegate->setCheckedByRisk($r, false);
+        });
+
+        $topBar->append($selectAllBtn, false);
+        $topBar->append($deselectAllBtn, false);
+        $topBar->append($safeOnlyBtn, false);
+        $vbox->append($topBar, false);
+
+        // === Table ===
         $table = \Libui\Table::fromModel($resultModel);
         $table->appendCheckboxColumn('✓', 0, 0);
         $table->appendTextColumn('类型', 1);
@@ -426,50 +447,23 @@ class MainWindow
         $table->setColumnWidth(2, 250);
         $table->setColumnWidth(3, 100);
         $table->setColumnWidth(4, 350);
-
         $vbox->appendStretchy($table);
 
-        // Toolbar
-        $toolbar = new \Libui\Box(false);
-        $toolbar->setPadded(true);
-
-        $selectAllBtn = new \Libui\Button('☑ 全选');
-        $selectAllBtn->onClicked(function () use ($resultDelegate) {
-            $resultDelegate->setAllChecked(true);
-        });
-
-        $deselectAllBtn = new \Libui\Button('☐ 取消');
-        $deselectAllBtn->onClicked(function () use ($resultDelegate) {
-            $resultDelegate->setAllChecked(false);
-        });
-
-        $safeOnlyBtn = new \Libui\Button('🟢 仅SAFE');
-        $safeOnlyBtn->onClicked(function () use ($resultDelegate) {
-            $resultDelegate->setCheckedByRisk('SAFE', true);
-            foreach (['WARN', 'HIGH'] as $r) $resultDelegate->setCheckedByRisk($r, false);
-        });
-
-        $toolbar->append($selectAllBtn, false);
-        $toolbar->append($deselectAllBtn, false);
-        $toolbar->append($safeOnlyBtn, false);
-        $toolbar->append(new \Libui\Label('  '), false);  // spacer
+        // === Bottom bar: close + generate ===
+        $bottomBar = new \Libui\Box(false);
+        $bottomBar->setPadded(true);
         $closeBtn = new \Libui\Button('✖ 关闭窗口');
-        $closeBtn->onClicked(function () use ($win) {
-            $win->hide();
-        });
-        $toolbar->append($closeBtn, false);
-        $vbox->append($toolbar, false);
-
-        // Generate button
+        $closeBtn->onClicked(function () use ($win) { $win->hide(); });
         $genBtn = new \Libui\Button("📋 生成迁移 SQL ({$total})");
         $genBtn->onClicked(function () use ($resultDelegate, $src, $tgt, $win) {
             $this->generateSqlFromDelegate($resultDelegate, $src, $tgt, $win);
         });
-        $vbox->append($genBtn, false);
+        $bottomBar->append($closeBtn, false);
+        $bottomBar->append(new \Libui\Label('  '), false);
+        $bottomBar->append($genBtn, false);
+        $vbox->append($bottomBar, false);
 
         $win->setChild($vbox);
-
-        // ✅ Critical: Table already has data BEFORE show()
         $win->show();
 
         $this->statusLabel->setText("比对完成：{$total} 处差异（新窗口已打开）");
@@ -830,6 +824,7 @@ class MainWindow
 
         $sqlWin = new \Libui\Window('生成的迁移 SQL', 800, 500);
         $sqlWin->setMargined(true);
+        $sqlWin->centered();
         $sqlWin->onClosing(function () { return true; });
 
         $sqlBox = new \Libui\Box(true);

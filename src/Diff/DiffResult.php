@@ -9,6 +9,10 @@ class DiffResult
     public const RISK_WARN = 'WARN';
     public const RISK_HIGH = 'HIGH';
 
+    public const PHASE_FETCH_SOURCE = 'fetch_source';
+    public const PHASE_FETCH_TARGET = 'fetch_target';
+    public const PHASE_COMPARE     = 'compare';
+
     /** @var array<int, array> */
     public array $newTables = [];
     /** @var array<int, array> */

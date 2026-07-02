@@ -11,7 +11,8 @@
         "helgesverre/libui": "dev-main",
         "9raxdev/mysql-struct-sync": "^1.0",
         "yangweijie/ui2": "^1.0",
-        "nunomaduro/collision": "^8.9"
+        "nunomaduro/collision": "^8.9",
+        "yangweijie/think-orm-async": "^1.0"
     },
     "autoload": {
         "psr-4": {
