@@ -3,6 +3,18 @@
     "description": "MySQL Schema Sync GUI Tool - PHP Edition",
     "type": "project",
     "bin": ["bin/mysql-schema-sync.php"],
+    "repositories": {
+        "mirrors": {
+            "type": "composer",
+            "url": "https://mirrors.huaweicloud.com/repository/php",
+            "canonical": false
+        },
+        "packagist.org": {
+            "type": "composer",
+            "url": "https://repo.packagist.org",
+            "canonical": false
+        }
+    },
     "require": {
         "php": ">=8.5",
         "ext-pdo": "*",
@@ -12,14 +24,13 @@
         "9raxdev/mysql-struct-sync": "^1.0",
         "yangweijie/ui2": "^1.0",
         "nunomaduro/collision": "^8.9",
-        "yangweijie/think-orm-async": "^1.0"
+        "yangweijie/think-orm-async": "*"
     },
     "autoload": {
         "psr-4": {
-            "MySqlSchemaSync\\": "src/"
+            "MySqlSchemaSync\\": "src/",
+            "think\\": "stubs/think/"
         },
-        "classmap": [
-            "vendor/yangweijie/think-orm-async/src/think/"
-        ]
+        "classmap": []
     }
 }
