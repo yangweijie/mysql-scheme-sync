@@ -5,7 +5,7 @@ use MySqlSchemaSync\Config\Connection;
 
 class StructSyncAdapter
 {
-    private \linge\MysqlStructSync $sync;
+    private \DDZH\MysqlStructSync $sync;
     private array $diffSql = [];
     private bool $cancelled = false;
     private ?\Closure $onProgress = null;
@@ -15,20 +15,25 @@ class StructSyncAdapter
 
     public function __construct(Connection $source, Connection $target)
     {
-        $this->sync = new \linge\MysqlStructSync(
+        // Note: MysqlStructSync constructor expects:
+        // - $self_db_conf: target DB (to be modified)
+        // - $refer_config: source DB (reference structure)
+        // But in our app, $source = new structure, $target = old structure to sync to
+        // So we need to swap them to match MysqlStructSync's expectation
+        $this->sync = new \DDZH\MysqlStructSync(
             ['host' => $target->host, 'username' => $target->user, 'passwd' => $target->password, 'dbname' => $target->database, 'port' => $target->port],
             ['host' => $source->host, 'username' => $source->user, 'passwd' => $source->password, 'dbname' => $source->database, 'port' => $source->port]
         );
     }
 
-    public function setOnProgress(\Closure $cb): void { $this->sync->on_progress = $cb; }
-    public function setOnPhase(\Closure $cb): void { $this->sync->on_phase = $cb; }
+    public function setOnProgress(\Closure $cb): void { $this->onProgress = $cb; }
+    public function setOnPhase(\Closure $cb): void { /* Not supported in DDZH version */ }
 
     public function fetchAll(array $excludePatterns = []): void
     {
-        $this->sync->setExcludePatterns($excludePatterns);
-        $this->sync->fetchBaseStructs();
-        $this->sync->fetchAdvanceStructs();
+        // DDZH version doesn't have setExcludePatterns()
+        // Will need to filter in compare() instead
+        // Nothing to do here - comparison happens in compare()
     }
 
     public function compare(array $excludePatterns = []): DiffResult
@@ -40,8 +45,9 @@ class StructSyncAdapter
         set_error_handler(function ($errno, $errstr) use (&$lastError) { $lastError = $errstr; return true; }, E_WARNING);
 
         try {
-            $this->sync->compareBaseStructs();
-            $this->sync->compareAdvanceStructs();
+            // Call baseDiff() and advanceDiff() to compare structures
+            $this->sync->baseDiff();
+            $this->sync->advanceDiff();
         } catch (\Throwable $e) {
             $d->error = $e->getMessage();
             restore_error_handler();

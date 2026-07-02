@@ -5,14 +5,14 @@ namespace MySqlSchemaSync\Gui;
 
 use Libui\Box;
 use Libui\Button;
-use Libui\Combobox;
-use Libui\Dialogs;
 use Libui\Entry;
 use Libui\Form;
 use Libui\Label;
 use Libui\Window;
 use MySqlSchemaSync\Config\ConfigStore;
 use MySqlSchemaSync\Config\Connection;
+use Yangweijie\Ui2\Dialogs\DialogConfirm;
+use Yangweijie\Ui2\Dialogs\MessageBox;
 
 class ConnectionWindow
 {
@@ -27,7 +27,7 @@ class ConnectionWindow
     public function __construct(ConfigStore $store, ?callable $onChange = null)
     {
         $this->store = $store;
-        $this->onChange = $onChange ? $onChange(...) : null;
+        $this->onChange = $onChange ? \Closure::fromCallable($onChange) : null;
     }
 
     public function show(Window $parent): void
@@ -37,9 +37,13 @@ class ConnectionWindow
         $this->window->onClosing(function () {
             return true; // 允许独立关闭，不退出主窗口
         });
-        $this->centerOnParent($parent);
+        // Center on parent window (manual positioning)
+        [$px, $py] = $parent->getPosition();
+        [$pw, $ph] = $parent->getContentSize();
+        [$w, $h]   = $this->window->getContentSize();
+        $this->window->setPosition(max(0, (int)($px + ($pw - $w) / 2)), max(0, (int)($py + ($ph - $h) / 2)));
 
-        $root = new Box();
+        $root = new Box(true); // vertical box
         $root->setPadded(true);
 
         $this->form = new Form();
@@ -91,18 +95,6 @@ class ConnectionWindow
         $this->window->show();
     }
 
-    private function centerOnParent(Window $parent): void
-    {
-        [$px, $py] = $parent->getPosition();
-        [$pw, $ph] = $parent->getContentSize();
-        [$w, $h]   = $this->window->getContentSize();
-
-        $x = (int) ($px + ($pw - $w) / 2);
-        $y = (int) ($py + ($ph - $h) / 2);
-
-        $this->window->setPosition(max(0, $x), max(0, $y));
-    }
-
     private function readForm(): array
     {
         $v = $this->form->values();
@@ -130,9 +122,9 @@ class ConnectionWindow
         );
         $result = $this->store->test($conn);
         if ($result['ok']) {
-            $this->status->setText("✅ 连接成功 | MySQL {$result['version']}");
+            MessageBox::info($this->window, '连接成功', "✅ 连接成功\nMySQL {$result['version']}");
         } else {
-            $this->status->setText("❌ 连接失败：{$result['error']}");
+            MessageBox::error($this->window, '连接失败', "❌ 连接失败：{$result['error']}");
         }
     }
 
@@ -140,7 +132,7 @@ class ConnectionWindow
     {
         $data = $this->readForm();
         if ($data['name'] === '' || $data['host'] === '' || $data['database'] === '') {
-            $this->status->setText('❌ 名称、主机、默认数据库不能为空');
+            MessageBox::warning($this->window, '保存失败', '❌ 名称、主机、默认数据库不能为空');
             return;
         }
         $id = $this->editingId ?? bin2hex(random_bytes(8));
@@ -155,7 +147,7 @@ class ConnectionWindow
         );
         $this->store->add($conn);
         $this->editingId = $id;
-        $this->status->setText("✅ 已保存：{$data['name']}");
+        MessageBox::info($this->window, '保存成功', "✅ 已保存：{$data['name']}");
         if ($this->onChange) {
             ($this->onChange)();
         }
@@ -165,7 +157,7 @@ class ConnectionWindow
     {
         $connections = array_values($this->store->list());
         if (!$connections) {
-            $this->status->setText('没有已保存的连接');
+            MessageBox::warning($this->window, '暂无连接', '没有已保存的连接');
             return;
         }
         $dlg = new Window('选择连接', 380, 160);
@@ -173,12 +165,11 @@ class ConnectionWindow
         $dlg->onClosing(function () {
             return true;
         });
-        if ($this->window) {
-            [$px, $py] = $this->window->getPosition();
-            [$pw, $ph] = $this->window->getContentSize();
-            [$w, $h]   = $dlg->getContentSize();
-            $dlg->setPosition(max(0, (int)($px + ($pw - $w) / 2)), max(0, (int)($py + ($ph - $h) / 2)));
-        }
+        // Center on parent window (manual positioning)
+        [$px, $py] = $this->window->getPosition();
+        [$pw, $ph] = $this->window->getContentSize();
+        [$w, $h]   = $dlg->getContentSize();
+        $dlg->setPosition(max(0, (int)($px + ($pw - $w) / 2)), max(0, (int)($py + ($ph - $h) / 2)));
         $box = new Box();
         $box->setPadded(true);
 
@@ -208,7 +199,7 @@ class ConnectionWindow
                 '密码'      => $c->password,
                 '默认数据库'=> $c->database,
             ]);
-            $this->status->setText("已加载：{$c->name}");
+            MessageBox::info($this->window, '加载成功', "已加载：{$c->name}");
             $dlg->hide();
         });
         $box->append($btn, false);
@@ -220,58 +211,20 @@ class ConnectionWindow
     private function onDelete(): void
     {
         if (!$this->editingId || !$this->store->get($this->editingId)) {
-            $this->status->setText('请先加载要删除的连接');
+            MessageBox::warning($this->window, '删除失败', '请先加载要删除的连接');
             return;
         }
         $data = $this->readForm();
-        if (!$this->confirmDelete($data['name'])) return;
+        if (!DialogConfirm::ask($this->window, '确认删除', "确定要删除连接「{$data['name']}」吗？\n此操作不可撤销。")) {
+            return;
+        }
         $this->store->remove($this->editingId);
         $this->editingId = null;
         $this->form->setValues([]);
-        $this->status->setText("已删除：{$data['name']}");
+        MessageBox::info($this->window, '删除成功', "已删除：{$data['name']}");
         if ($this->onChange) {
             ($this->onChange)();
         }
-    }
-
-    /** Show a confirmation dialog, returns true if confirmed. */
-    private function confirmDelete(string $name): bool
-    {
-        $confirmed = false;
-        $dlg = new Window('确认删除', 320, 140);
-        $dlg->setMargined(true);
-        $dlg->onClosing(function () {
-            return true; // 关闭按钮 = 取消，$confirmed 保持 false
-        });
-        if ($this->window) {
-            [$px, $py] = $this->window->getPosition();
-            [$pw, $ph] = $this->window->getContentSize();
-            [$w, $h]   = $dlg->getContentSize();
-            $dlg->setPosition(max(0, (int)($px + ($pw - $w) / 2)), max(0, (int)($py + ($ph - $h) / 2)));
-        }
-        $box = new Box();
-        $box->setPadded(true);
-        $box->append(new Label("确定要删除连接「{$name}」吗？\n此操作不可撤销。"), false);
-
-        $btnRow = Box::horizontal();
-        $btnRow->setPadded(true);
-        $cancelBtn = new Button('取消');
-        $cancelBtn->onClicked(function () use ($dlg) {
-            $dlg->hide();
-        });
-        $confirmBtn = new Button('确认删除');
-        $confirmBtn->onClicked(function () use ($dlg, &$confirmed) {
-            $confirmed = true;
-            $dlg->hide();
-        });
-        $btnRow->append($cancelBtn, false);
-        $btnRow->append($confirmBtn, false);
-
-        $box->append($btnRow, false);
-        $dlg->setChild($box);
-        $dlg->show();
-
-        return $confirmed;
     }
 
     private function onImport(): void
@@ -280,7 +233,7 @@ class ConnectionWindow
         if (!$path || !file_exists($path)) return;
         $json = file_get_contents($path);
         $count = $this->store->importJson($json);
-        $this->status->setText("已导入 {$count} 条连接");
+        MessageBox::info($this->window, '导入成功', "已导入 {$count} 条连接");
         if ($this->onChange) {
             ($this->onChange)();
         }
@@ -291,6 +244,6 @@ class ConnectionWindow
         $path = $this->window->dialogs()->saveFile('mysql-schema-sync-config.json');
         if (!$path) return;
         file_put_contents($path, $this->store->exportJson());
-        $this->status->setText("已导出到：$path");
+        MessageBox::info($this->window, '导出成功', "已导出到：$path");
     }
 }

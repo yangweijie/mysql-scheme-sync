@@ -3,7 +3,6 @@
 
 namespace MySqlSchemaSync\Gui;
 
-use Libui\Color;
 use Libui\Generated\Enum\TableValueType;
 use Libui\TableModel;
 use Libui\TableModelDelegate;
@@ -12,12 +11,11 @@ use Libui\TableModelDelegate;
  * Table model delegate that renders diff results as a checkable grid.
  *
  * Columns:
- *   0 – Checkbox (bool, editable)
+ *   0 – Checkbox (int, editable)
  *   1 – Type      (string: "新增表" / "变更表" / "删除表" / …)
  *   2 – Name      (string)
- *   3 – Risk      (string: SAFE / WARN / HIGH) — coloured via col 5
+ *   3 – Risk      (string: 🟢SAFE / 🟡WARN / 🔴HIGH)
  *   4 – Details   (string)
- *   5 – RiskColor (Color, referenced by column 3 for text colour)
  */
 class DiffTableModelDelegate extends TableModelDelegate
 {
@@ -28,10 +26,6 @@ class DiffTableModelDelegate extends TableModelDelegate
     private $onToggle = null;
 
     private ?TableModel $model = null;
-
-    private static ?Color $riskColorSafe = null;
-    private static ?Color $riskColorWarn = null;
-    private static ?Color $riskColorHigh = null;
 
     public function setModel(TableModel $m): void
     {
@@ -159,38 +153,33 @@ class DiffTableModelDelegate extends TableModelDelegate
 
     // --- TableModelDelegate interface ---
 
-    public function numColumns(): int { return 6; }
+    public function numColumns(): int { return 5; }
 
     public function numRows(): int { return count($this->rows); }
 
     public function columnType(int $column): TableValueType
     {
-        return match ($column) {
-            0 => TableValueType::Int,
-            5 => TableValueType::Color,
-            default => TableValueType::String,
-        };
+        // Column 0 = Int (checkbox), rest = String
+        return $column === 0 ? TableValueType::Int : TableValueType::String;
     }
 
-    public function cellValue(int $row, int $column): string|int|bool|Color|null
+    public function cellValue(int $row, int $column): string|int|bool|null
     {
-        if (!isset($this->rows[$row])) return '';
+        if (!isset($this->rows[$row])) {
+            return $column === 0 ? 0 : '';
+        }
         $d = $this->rows[$row];
 
-        if ($column === 5) {
-            return match ($d['risk']) {
-                'SAFE' => self::colorSafe(),
-                'WARN' => self::colorWarn(),
-                'HIGH' => self::colorHigh(),
-                default => null,
-            };
-        }
-
         return match ($column) {
-            0 => $d['checked'],
+            0 => $d['checked'] ? 1 : 0,
             1 => $d['type'],
             2 => $d['name'],
-            3 => $d['risk'],
+            3 => match($d['risk']) {
+                'SAFE' => '🟢SAFE',
+                'WARN' => '🟡WARN',
+                'HIGH' => '🔴HIGH',
+                default => $d['risk'],
+            },
             4 => $d['detail'],
             default => '',
         };
@@ -207,23 +196,6 @@ class DiffTableModelDelegate extends TableModelDelegate
     public function cellEditable(int $row, int $column): ?bool
     {
         return $column === 0 ? true : null;
-    }
-
-    // ── Colour helpers (lazily created) ──────────────────────
-
-    private static function colorSafe(): Color
-    {
-        return self::$riskColorSafe ??= Color::rgba(0.2, 0.7, 0.2, 1.0);
-    }
-
-    private static function colorWarn(): Color
-    {
-        return self::$riskColorWarn ??= Color::rgba(0.85, 0.65, 0.0, 1.0);
-    }
-
-    private static function colorHigh(): Color
-    {
-        return self::$riskColorHigh ??= Color::rgba(0.85, 0.2, 0.2, 1.0);
     }
 
     private function changesSummary(array $changes): string

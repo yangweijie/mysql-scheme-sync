@@ -8,8 +8,10 @@
         "ext-pdo": "*",
         "ext-openssl": "*",
         "ext-ffi": "*",
-        "helgesverre/libui": "^0.7.1",
-        "9raxdev/mysql-struct-sync": "^1.0"
+        "helgesverre/libui": "dev-main",
+        "9raxdev/mysql-struct-sync": "^1.0",
+        "yangweijie/ui2": "^1.0",
+        "nunomaduro/collision": "^8.9"
     },
     "autoload": {
         "psr-4": {
