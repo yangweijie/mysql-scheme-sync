@@ -18,8 +18,18 @@ class StructSyncAdapter
     private ?array $prefetchedAdvanceSrc = null;
     private ?array $prefetchedAdvanceTgt = null;
 
+    /** @var string[] Enabled compare scope categories */
+    private array $scope = ['tables', 'views', 'functions', 'procedures', 'foreign_keys', 'triggers', 'events'];
+
+    /** @var string[] Table names that will be newly created (constraint diffs for these skipped) */
+    private array $newTableNames = [];
+    /** @var string[] Table names that will be dropped (constraint diffs for these skipped) */
+    private array $droppedTableNames = [];
+
     public function cancel(): void { $this->cancelled = true; }
     public function isCancelled(): bool { return $this->cancelled; }
+
+    public function setScope(array $scope): void { $this->scope = $scope; }
 
     public function __construct(Connection $source, Connection $target)
     {
@@ -99,51 +109,67 @@ class StructSyncAdapter
 
         $res = [];
 
-        // 1. 新增表（新结构有、旧结构没有 → 添加）
-        $res['ADD_TABLE'] = array_diff($tgt['tables'] ?? [], $src['tables'] ?? []);
-        // 2. 删除表（旧结构有、新结构没有 → 删除）
-        $res['DROP_TABLE'] = array_diff($src['tables'] ?? [], $tgt['tables'] ?? []);
+        $tablesEnabled = in_array('tables', $this->scope);
+        $fkEnabled = in_array('foreign_keys', $this->scope);
 
-        $srcCols = $src['columns'] ?? [];
-        $tgtCols = $tgt['columns'] ?? [];
+        // 1-4. 表/列/约束差异（仅当 tables scope 开启时）
+        if ($tablesEnabled) {
+            // 1. 新增表（新结构有、旧结构没有 → 添加）
+            $res['ADD_TABLE'] = array_diff($tgt['tables'] ?? [], $src['tables'] ?? []);
+            // 2. 删除表（旧结构有、新结构没有 → 删除）
+            $res['DROP_TABLE'] = array_diff($src['tables'] ?? [], $tgt['tables'] ?? []);
 
-        // 3. 查找公共表，对比列差异
-        $commonTables = array_intersect($src['tables'] ?? [], $tgt['tables'] ?? []);
+            // Remember new/dropped table names for buildDiffResult() safety filter
+            $this->newTableNames = $res['ADD_TABLE'];
+            $this->droppedTableNames = $res['DROP_TABLE'];
 
-        foreach ($commonTables as $table) {
-            $srcTableCols = $srcCols[$table] ?? [];
-            $tgtTableCols = $tgtCols[$table] ?? [];
+            $srcCols = $src['columns'] ?? [];
+            $tgtCols = $tgt['columns'] ?? [];
 
-            // 目标有、源没有 → ADD
-            foreach ($tgtTableCols as $field => $def) {
-                if (!isset($srcTableCols[$field])) {
-                    $res['ADD_FIELD'][$table][$field] = $def;
-                } elseif ($srcTableCols[$field] !== $def) {
-                    $res['MODIFY_FIELD'][$table][$field] = $def;
+            // 3. 查找公共表，对比列差异
+            $commonTables = array_intersect($src['tables'] ?? [], $tgt['tables'] ?? []);
+
+            foreach ($commonTables as $table) {
+                $srcTableCols = $srcCols[$table] ?? [];
+                $tgtTableCols = $tgtCols[$table] ?? [];
+
+                // 目标有、源没有 → ADD
+                foreach ($tgtTableCols as $field => $def) {
+                    if (!isset($srcTableCols[$field])) {
+                        $res['ADD_FIELD'][$table][$field] = $def;
+                    } elseif ($srcTableCols[$field] !== $def) {
+                        $res['MODIFY_FIELD'][$table][$field] = $def;
+                    }
+                }
+
+                // 源有、目标没有 → DROP
+                foreach ($srcTableCols as $field => $def) {
+                    if (!isset($tgtTableCols[$field])) {
+                        $res['DROP_FIELD'][$table][$field] = $def;
+                    }
                 }
             }
 
-            // 源有、目标没有 → DROP
-            foreach ($srcTableCols as $field => $def) {
-                if (!isset($tgtTableCols[$field])) {
-                    $res['DROP_FIELD'][$table][$field] = $def;
-                }
+            // 4. 约束差异
+            // 排除新增/删除表的约束，它们已包含在 CREATE/DROP TABLE 中
+            $addTableKeys = array_flip($res['ADD_TABLE'] ?? []);
+            $dropTableKeys = array_flip($res['DROP_TABLE'] ?? []);
+            $srcConstraints = array_diff_key($src['constraints'] ?? [], $dropTableKeys);
+            $tgtConstraints = array_diff_key($tgt['constraints'] ?? [], $addTableKeys);
+
+            // 外键 scope 关闭时，过滤掉 FOREIGN KEY 约束行
+            if (!$fkEnabled) {
+                $srcConstraints = $this->stripForeignKeys($srcConstraints);
+                $tgtConstraints = $this->stripForeignKeys($tgtConstraints);
             }
+
+            $res['DROP_CONSTRAINT'] = self::arrayDiffAssocRecursive(
+                $srcConstraints, $tgt['constraints'] ?? []
+            );
+            $res['ADD_CONSTRAINT'] = self::arrayDiffAssocRecursive(
+                $tgtConstraints, $src['constraints'] ?? []
+            );
         }
-
-        // 4. 约束差异
-        // 排除新增/删除表的约束，它们已包含在 CREATE/DROP TABLE 中
-        $addTableKeys = array_flip($res['ADD_TABLE'] ?? []);
-        $dropTableKeys = array_flip($res['DROP_TABLE'] ?? []);
-        $srcConstraints = array_diff_key($src['constraints'] ?? [], $dropTableKeys);
-        $tgtConstraints = array_diff_key($tgt['constraints'] ?? [], $addTableKeys);
-
-        $res['DROP_CONSTRAINT'] = self::arrayDiffAssocRecursive(
-            $srcConstraints, $tgt['constraints'] ?? []
-        );
-        $res['ADD_CONSTRAINT'] = self::arrayDiffAssocRecursive(
-            $tgtConstraints, $src['constraints'] ?? []
-        );
 
         // 5. 生成差异 SQL
         $diffSql = [];
@@ -158,6 +184,21 @@ class StructSyncAdapter
     }
 
     /**
+     * Remove FOREIGN KEY constraint lines from constraint arrays.
+     * Keeps PRIMARY KEY and KEY (index) entries.
+     */
+    private function stripForeignKeys(array $constraints): array
+    {
+        $filtered = [];
+        foreach ($constraints as $table => $lines) {
+            $filtered[$table] = array_values(
+                array_filter($lines, fn(string $line) => !preg_match('/\bFOREIGN\s+KEY\b/i', $line))
+            );
+        }
+        return $filtered;
+    }
+
+    /**
      * 获取高级对象差异（VIEW/TRIGGER 等）
      * 如果有预获取数据则直接使用，否则查询数据库（think-orm-async 并行化）
      */
@@ -167,6 +208,14 @@ class StructSyncAdapter
             $this->appendAdvanceFromPrefetched($diffSql);
             return;
         }
+
+        $typeScopeMap = [
+            'VIEW'      => 'views',
+            'TRIGGER'   => 'triggers',
+            'EVENT'     => 'events',
+            'FUNCTION'  => 'functions',
+            'PROCEDURE' => 'procedures',
+        ];
 
         $advance = [
             'VIEW'      => ["SELECT TABLE_NAME as Name FROM information_schema.VIEWS WHERE TABLE_SCHEMA='#'", 'Create View'],
@@ -180,6 +229,9 @@ class StructSyncAdapter
         $tgtConfig = AsyncStructureFetcher::buildAsyncConfig($this->target);
 
         foreach ($advance as $type => $listSql) {
+            $scopeKey = $typeScopeMap[$type];
+            if (!in_array($scopeKey, $this->scope)) continue;
+
             $srcObjs = $this->fetchAdvanceObjectsAsync($srcConfig, $this->source->database, $type, $listSql);
             $tgtObjs = $this->fetchAdvanceObjectsAsync($tgtConfig, $this->target->database, $type, $listSql);
 
@@ -206,7 +258,17 @@ class StructSyncAdapter
      */
     private function appendAdvanceFromPrefetched(array &$diffSql): void
     {
-        foreach (['VIEW', 'TRIGGER', 'EVENT', 'FUNCTION', 'PROCEDURE'] as $type) {
+        $typeScopeMap = [
+            'VIEW'      => 'views',
+            'TRIGGER'   => 'triggers',
+            'EVENT'     => 'events',
+            'FUNCTION'  => 'functions',
+            'PROCEDURE' => 'procedures',
+        ];
+
+        foreach ($typeScopeMap as $type => $scopeKey) {
+            if (!in_array($scopeKey, $this->scope)) continue;
+
             $srcObjs = $this->prefetchedAdvanceSrc[$type] ?? [];
             $tgtObjs = $this->prefetchedAdvanceTgt[$type] ?? [];
 
@@ -378,6 +440,36 @@ class StructSyncAdapter
                 $d->changedTables[$table]['name'] = $table;
                 $d->changedTables[$table]['risk'] = DiffResult::RISK_HIGH;
                 $d->changedTables[$table]['changes'][] = ['kind' => 'DROP_COLUMN', 'risk' => DiffResult::RISK_HIGH, 'column' => $col];
+            }
+        }
+        // ADD_CONSTRAINT: ALTER TABLE `t` ADD PRIMARY KEY / KEY / CONSTRAINT FOREIGN KEY
+        $newFKTableSkip = array_flip($this->newTableNames);
+        foreach ($this->diffSql['ADD_CONSTRAINT'] ?? [] as $sql) {
+            if (!preg_match("/^ALTER\s+TABLE\s+`(\w+)`/is", $sql, $m)) continue;
+            $table = $m[1];
+            // Skip constraints for newly added tables — already in CREATE TABLE SQL
+            if (isset($newFKTableSkip[$table])) continue;
+
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+(?:PRIMARY\s+KEY|KEY\s+`(\w+)`)/is", $sql, $m)) {
+                $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
+                $d->newIndexes[] = ['name' => $idxName, 'risk' => DiffResult::RISK_SAFE, 'table' => $table];
+            } elseif (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+CONSTRAINT\s+`(\w+)`\s+FOREIGN\s+KEY/is", $sql, $m)) {
+                $d->newForeignKeys[] = ['name' => $m[2], 'risk' => DiffResult::RISK_SAFE, 'table' => $m[1]];
+            }
+        }
+        // DROP_CONSTRAINT: ALTER TABLE `t` DROP PRIMARY KEY / KEY / CONSTRAINT
+        $dropFKTableSkip = array_flip($this->droppedTableNames);
+        foreach ($this->diffSql['DROP_CONSTRAINT'] ?? [] as $sql) {
+            if (!preg_match("/^ALTER\s+TABLE\s+`(\w+)`/is", $sql, $m)) continue;
+            $table = $m[1];
+            // Skip constraints for dropped tables — already covered by DROP TABLE
+            if (isset($dropFKTableSkip[$table])) continue;
+
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+(?:PRIMARY\s+KEY|KEY\s+`(\w+)`)/is", $sql, $m)) {
+                $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
+                $d->removedIndexes[] = ['name' => $idxName, 'risk' => DiffResult::RISK_HIGH, 'table' => $table];
+            } elseif (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+CONSTRAINT\s+`(\w+)`/is", $sql, $m)) {
+                $d->removedForeignKeys[] = ['name' => $m[2], 'risk' => DiffResult::RISK_HIGH, 'table' => $m[1]];
             }
         }
         // Normalize changedTables from temp keyed array to sequential

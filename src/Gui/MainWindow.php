@@ -5,6 +5,7 @@ namespace MySqlSchemaSync\Gui;
 
 use Libui\Box;
 use Libui\Button;
+use Libui\Checkbox;
 use Libui\Combobox;
 use Libui\Entry;
 use Libui\Label;
@@ -34,6 +35,9 @@ class MainWindow
 
     /** @var ?AsyncCompareRunner Current async compare runner */
     private ?AsyncCompareRunner $currentRunner = null;
+
+    /** @var array<string, Checkbox> Scope checkboxes */
+    private array $scopeCheckboxes = [];
 
     private Window $window;
     private Combobox $srcCombo;
@@ -117,6 +121,34 @@ class MainWindow
         $filterRow->append(new Label('排除表 (逗号分隔 glob):'), false);
         $filterRow->append($this->filterEntry, true);
         $root->append($filterRow, false);
+
+        // Compare scope checkboxes
+        $scopeRow = Box::horizontal();
+        $scopeRow->setPadded(true);
+        $scopeRow->append(new Label('对比范围:'), false);
+
+        $scopeOptions = [
+            'tables'       => '表',
+            'views'        => '视图',
+            'functions'    => '函数',
+            'procedures'   => '存储过程',
+            'foreign_keys' => '外键',
+            'triggers'     => '触发器',
+            'events'       => '事件',
+        ];
+
+        $savedScope = $this->store->getSetting('compareScope', null);
+        if ($savedScope === null) {
+            $savedScope = array_keys($scopeOptions);
+        }
+
+        foreach ($scopeOptions as $key => $label) {
+            $cb = new Checkbox($label);
+            $cb->setChecked(in_array($key, $savedScope));
+            $this->scopeCheckboxes[$key] = $cb;
+            $scopeRow->append($cb, false);
+        }
+        $root->append($scopeRow, false);
 
         // Result area — create ALL controls BEFORE show()
         $this->resultArea = new Box();
@@ -279,6 +311,18 @@ class MainWindow
         return array_map('trim', explode(',', $text));
     }
 
+    private function getCompareScope(): array
+    {
+        $scope = [];
+        foreach ($this->scopeCheckboxes as $key => $cb) {
+            if ($cb->checked()) {
+                $scope[] = $key;
+            }
+        }
+        // At minimum, tables must be included for a meaningful compare
+        return $scope ?: ['tables'];
+    }
+
     private function onCompare(): void
     {
         $src = $this->getSelectedConnection($this->srcCombo);
@@ -295,6 +339,10 @@ class MainWindow
 
         $this->store->setSetting('excludePatterns', trim($this->filterEntry->text()));
         $patterns = $this->getExcludePatterns();
+
+        // Save compare scope
+        $scope = $this->getCompareScope();
+        $this->store->setSetting('compareScope', $scope);
 
         $this->compareBtn->disable();
         $this->manageBtn->disable();
@@ -356,7 +404,7 @@ class MainWindow
         });
 
         $this->currentRunner = $runner;
-        $runner->start(new Loop(), $src, $tgt, $patterns);
+        $runner->start(new Loop(), $src, $tgt, $patterns, $scope);
     }
 
     /**

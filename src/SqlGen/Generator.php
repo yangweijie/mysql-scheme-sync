@@ -95,21 +95,29 @@ class Generator
             $lines[] = "";
         }
 
-        foreach ($diffSql['ADD_CONSTRAINT'] ?? [] as $table => $constraints) {
-            if (!isset($newIndexMap[$table])) continue;
-            foreach ($constraints as $c) {
-                if (preg_match('/`(\w+)`/', $c, $nm) && isset($newIndexMap[$table][$nm[1]])) {
-                    $lines[] = "ALTER TABLE `{$table}` ADD {$c};";
+        // ADD_CONSTRAINT: diffSql contains flat ALTER TABLE SQL strings
+        foreach ($diffSql['ADD_CONSTRAINT'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+(?:PRIMARY\s+KEY|KEY\s+`(\w+)`)/is", $sql, $m)) {
+                $table = $m[1];
+                $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
+                if (isset($newIndexMap[$table][$idxName])) {
+                    $lines[] = $sql . ';';
                 }
+            } elseif (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+CONSTRAINT\s+`(\w+)`\s+FOREIGN\s+KEY/is", $sql, $m)) {
+                $lines[] = $sql . ';';
             }
         }
 
-        foreach ($diffSql['DROP_CONSTRAINT'] ?? [] as $table => $constraints) {
-            if (!isset($removedIndexMap[$table])) continue;
-            foreach ($constraints as $c) {
-                if (preg_match('/`(\w+)`/', $c, $nm) && isset($removedIndexMap[$table][$nm[1]])) {
-                    $lines[] = $c;
+        // DROP_CONSTRAINT: flat ALTER TABLE SQL strings
+        foreach ($diffSql['DROP_CONSTRAINT'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+(?:PRIMARY\s+KEY|KEY\s+`(\w+)`)/is", $sql, $m)) {
+                $table = $m[1];
+                $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
+                if (isset($removedIndexMap[$table][$idxName])) {
+                    $lines[] = $sql . ';';
                 }
+            } elseif (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+CONSTRAINT\s+`(\w+)`/is", $sql, $m)) {
+                $lines[] = $sql . ';';
             }
         }
 
