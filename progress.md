@@ -15,6 +15,8 @@
 - **Schema dump 文件位置修复：默认输出改为 ~/.mysql-schema-sync/dumps/**
 - **调试输出完成：debugLog/debugLogException + 默认启用**
 - **UI 阻塞修复完成：工作队列架构（每个查询独立步骤）**
+- **Windows 任务栏图标修复完成：PHP FFI 调用 user32.dll（跨进程 HICON 无效，需同进程加载）**
+- **AGENTS.md 更新完成：移除废弃的 9raxdev/mysql-struct-sync 引用、MainWindow 引用；补充新文件文档**
 
 ## 最新改动（Phase 15 - 工作队列架构）
 | 改动 | 文件 |
@@ -27,6 +29,16 @@
 | 新增 `fetchOneTable()` 单表查询 | `src/Diff/AsyncCompareRunner.php` |
 | 新增 `listAdvanced()` 查询高级对象列表 + 入队 | `src/Diff/AsyncCompareRunner.php` |
 | 新增 `fetchOneAdvanced()` 单对象查询 | `src/Diff/AsyncCompareRunner.php` |
+
+## 最新改动（Windows 任务栏图标修复 + AGENTS.md 更新）
+| 改动 | 文件 |
+|------|------|
+| PowerShell 方案替换为 PHP FFI 调用 user32.dll（跨进程 HICON 无效） | `src/Gui/WebViewUI.php` |
+| 新增 `setWinIconsFfi()` — 同进程 FFI 加载 icon.ico + WM_SETICON | `src/Gui/WebViewUI.php` |
+| 新增 `$kernel32` 静态属性（GetLastError 从 kernel32.dll 加载） | `src/Gui/WebViewUI.php` |
+| 删除旧的 `setWinIcons()` PowerShell/proc_open 方案 | `src/Gui/WebViewUI.php` |
+| 移除 9raxdev/mysql-struct-sync 依赖引用、MainWindow 引用 | `AGENTS.md` |
+| 补充 AsyncCompareRunner、DDLDefinitionParser、DllBootstrap、CLI 工具文档 | `AGENTS.md` |
 
 ## 最近改动（Phase 11-14）
 | 改动 | 文件 |

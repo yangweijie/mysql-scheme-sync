@@ -31,6 +31,10 @@
       <a class="nav-item" data-page="sql" onclick="switchPage('sql')">
         <span class="nav-icon">📄</span> SQL 预览
       </a>
+      <a class="nav-item" data-page="terminal" onclick="switchPage('terminal')">
+        <span class="nav-icon">🖥</span> 终端输出
+        <span class="nav-dot" id="terminalDot" style="display:none;margin-left:auto;width:6px;height:6px;border-radius:50%;background:#4caf50;"></span>
+      </a>
     </nav>
     <div class="sidebar-footer">
       <div class="sidebar-version">v1.0</div>
@@ -107,6 +111,19 @@
         <p class="page-desc">选择数据库进行结构差异比对</p>
       </div>
       <div class="page-body">
+        <!-- Quick Compare Selector -->
+        <div class="quick-compare-bar">
+          <div class="compare-select-group">
+            <label>快速对比</label>
+            <div class="quick-compare-select-wrap">
+              <select id="quickCompareSelect" class="select" onchange="loadQuickCompare()">
+                <option value="">— 选择快速对比配置 —</option>
+              </select>
+              <button class="btn btn-sm btn-danger quick-compare-del-btn" id="quickCompareDelBtn" style="display:none;" onclick="deleteQuickCompare()" title="删除当前快速对比">✕</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Connection selectors -->
         <div class="compare-selectors">
           <div class="compare-select-group">
@@ -120,6 +137,7 @@
             <label>目标库（旧结构 → 将同步）</label>
             <select id="tgtSelect" class="select"></select>
           </div>
+          <button class="btn btn-sm btn-secondary save-quick-compare-btn" onclick="showSaveQuickCompareDialog()" title="保存为快速对比">另存为快速对比</button>
         </div>
 
         <!-- Filter & Scope -->
@@ -207,6 +225,27 @@
         <textarea id="sqlOutput" class="sql-output" readonly placeholder="点击「生成迁移 SQL」生成 SQL 语句..."></textarea>
       </div>
     </div>
+
+    <!-- ════ Terminal / Stdout Page ════ -->
+    <div id="page-terminal" class="page">
+      <div class="page-header">
+        <h2><span class="page-icon">🖥</span> 终端输出</h2>
+        <p class="page-desc">实时显示应用标准输出</p>
+      </div>
+      <div class="page-body">
+        <div class="terminal-container">
+          <div class="terminal-toolbar">
+            <button class="btn btn-sm" onclick="clearTerminal()">🗑 清空</button>
+            <button class="btn btn-sm" id="terminalAutoScrollBtn" onclick="toggleAutoScroll()">📌 自动滚动: 开</button>
+            <div class="terminal-status">
+              <div class="terminal-dot"></div>
+              <span id="terminalLineCount">0 行</span>
+            </div>
+          </div>
+          <div class="terminal-output" id="terminalOutput"></div>
+        </div>
+      </div>
+    </div>
   </main>
 </div>
 
@@ -215,6 +254,7 @@
   <div class="loading-box">
     <div class="spinner-lg"></div>
     <div id="loadingText" class="loading-text">处理中...</div>
+    <button id="loadingCancelBtn" class="btn btn-danger loading-cancel-btn" style="display:none;" onclick="cancelCompare()">终止比对</button>
   </div>
 </div>
 

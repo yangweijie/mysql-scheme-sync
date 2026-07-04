@@ -114,6 +114,21 @@
 - [x] `fetchOneAdvanced()` 单对象 SHOW CREATE 查询
 - [x] 步骤间 delay 1ms，每个步骤只查一条 SQL，事件循环可处理 WebView2 事件
 
+### Phase 16: Windows 任务栏图标修复 ✅
+- [x] 诊断：PowerShell 子进程的 HICON 句柄对 PHP 进程无效（跨进程句柄隔离）
+- [x] 诊断：`GetCurrentProcess().Id` 返回 PowerShell 进程 PID 而非 PHP 进程 PID
+- [x] 替换为 PHP FFI 直接调用 user32.dll（`GetForegroundWindow` + `LoadImageW` + `SendMessageW`）
+- [x] 修复 FFI 类型：`uint` → `unsigned int`、`wchar_t` 需 typedef、`GetLastError` 在 kernel32.dll
+- [x] 修复 `FFI::string($titleBuf)` 返回 CData 无法 dechex 转换问题
+- [x] 删除旧的 PowerShell .ps1 缓存文件
+
+### Phase 17: AGENTS.md 更新 ✅
+- [x] 移除废弃的 `9raxdev/mysql-struct-sync` 依赖引用（已完全移除）
+- [x] 移除 `MainWindow` 引用（类不存在，已重构为 WebViewUI）
+- [x] 补充 CLI 工具文档（dump-schema.php、compare-offline.php、benchmark-async.php）
+- [x] 补充 DllBootstrap、AsyncCompareRunner、DDLDefinitionParser 文档
+- [x] 补充 bridge/ 和 stubs/think/ 目录到项目结构
+
 ## 技术决策
 | 决策 | 原因 |
 |------|------|
@@ -129,6 +144,9 @@
 | ALTER TABLE 合并 | Navicat §5.2：同一表的多个变更合并为一条 ALTER，减少网络往返 |
 | 工作队列架构替代固定步骤列表 | 每个 SHOW CREATE TABLE 独立步骤，事件循环可处理 WebView2 事件，UI 不卡死 |
 | JS 轮询 getCompareResult 每 300ms | 比对结果通过桥接函数异步返回，JS 定时检查状态 |
+| 用 PHP FFI 替代 PowerShell 设图标 | 跨进程 HICON 句柄无效（LoadImageW 在 PS 进程返回的句柄对 PHP 进程无效） |
+| `typedef short wchar_t` | PHP FFI 不识别 wchar_t，Windows 上 wchar_t 是 2 字节 short |
+| `GetLastError` 从 kernel32.dll 加载 | 该函数不在 user32.dll 中，需单独加载 |
 
 ## 错误记录
 | 错误 | 原因 | 修复 |
@@ -146,3 +164,10 @@
 | 比对期间 UI 卡死 | syncFetchTables 在单个回调内跑 100+ 查询 | 工作队列架构，每个查询独立步骤 |
 | 输出 SQL 双分号 `;;` | raw SQL 已含 `;`，Generator 再追加 | 8 处 `rtrim($sql, ';')` 修复 |
 | Schema dump 文件在项目根目录 | `getcwd()` 指向项目根 | 改为 `$store->getDir() . '/dumps/'` |
+| 任务栏图标不生效（PowerShell 方案） | `GetCurrentProcess().Id` 返回 PS 子进程 PID | 传入 PHP 进程 PID（`getmypid()`） |
+| 任务栏图标仍不生效 | 跨进程 HICON 句柄无效 | 改用 PHP FFI 同进程加载 icon |
+| UI 假死（PowerShell shell_exec） | `shell_exec()` 阻塞 libui 事件循环 | 先改 proc_open 非阻塞，后完全替换为 FFI |
+| FFI `Undefined C type "uint"` | PHP FFI 不识别 `uint` | 改为 `unsigned int` |
+| FFI `Undefined C type "wchar_t"` | PHP FFI 不识别 `wchar_t` | 添加 `typedef short wchar_t` |
+| FFI `Failed resolving 'GetLastError'` | 该函数在 kernel32.dll 不在 user32.dll | 分离加载 kernel32.dll |
+| FFI `Object of class FFI\CData could not be converted to int` | 指针不能 `(int)` 转换 | 移除 dechex 调试输出 |

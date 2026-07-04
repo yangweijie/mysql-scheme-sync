@@ -23,6 +23,7 @@
         "helgesverre/libui": "dev-main",
         "yangweijie/ui2": "^1.0",
         "yangweijie/think-orm-async": "*",
+        "nunomaduro/collision": "^7.0",
         "ext-mysqli": "*"
     },
     "autoload": {

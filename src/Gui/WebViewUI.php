@@ -30,8 +30,12 @@ class WebViewUI
 
     // Step-by-step compare state
     private ?AsyncCompareRunner $currentRunner = null;
-    private string $comparePhase = 'idle'; // idle, running, done, error
+    private string $comparePhase = 'idle';
     private string $compareError = '';
+
+    // Stdout capture
+    private static array $stdoutBuffer = [];
+    private static int $stdoutOffset = 0;
 
     // Cached settings
     private string $excludePatterns = '';
@@ -54,6 +58,19 @@ class WebViewUI
         $this->window = new Window('MySQL SchemaSync — WebView', 1100, 750);
         $this->window->setMargined(false)->setResizeable(true)->centered();
 
+        $assetsDir = \dirname(__DIR__, 2) . '/src/Gui/assets';
+        $iconPath = (PHP_OS_FAMILY === 'Windows')
+            ? $assetsDir . '/icon.ico'
+            : $assetsDir . '/icon.png';
+
+        // Set icon before window is shown.
+        if (\file_exists($iconPath)) {
+            $this->window->setWindowIcon($iconPath);
+            if (PHP_OS_FAMILY === 'Windows') {
+                $this->setWindowIcons($iconPath);
+            }
+        }
+
         // Minimal Box child (libui needs at least one control)
         $box = new Box();
         $this->window->setChild($box);
@@ -67,6 +84,21 @@ class WebViewUI
         self::debugLog("Bridge handlers registered");
         $this->webview->setHtml($this->getAppHtml());
         self::debugLog("WebView HTML loaded");
+
+        // Windows: re-apply icons after WebView2 settles.
+        // setTaskbarIcon() handles both ICON_SMALL + ICON_BIG
+        // via ExtractIconExW (proper multi-resolution ICO extraction).
+        if (PHP_OS_FAMILY === 'Windows' && \file_exists($iconPath)) {
+            Loop::delay(500, function () use ($iconPath) {
+                self::debugLog("setWinIcons (apply, delay 500ms)");
+                try {
+                    $this->setWindowIcons($iconPath);
+                    self::debugLog("setWinIcons: done");
+                } catch (\Throwable $e) {
+                    self::debugLog("setWinIcons error: " . $e->getMessage());
+                }
+            });
+        }
 
         $this->window->run();
     }
@@ -83,7 +115,9 @@ class WebViewUI
             return;
         }
         $ts = date('H:i:s.') . str_pad((int)(microtime(true) * 1000) % 1000, 3, '0', STR_PAD_LEFT);
-        fwrite(STDOUT, "[{$ts}] [DEBUG] {$msg}\n");
+        $line = "[{$ts}] [DEBUG] {$msg}";
+        fwrite(STDOUT, $line . "\n");
+        self::$stdoutBuffer[] = $line;
     }
 
     private static function debugLogException(\Throwable $e, string $context = ''): void
@@ -97,6 +131,95 @@ class WebViewUI
         if ($e->getPrevious()) {
             self::debugLog("  Previous: " . $e->getPrevious()->getMessage());
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  Windows Taskbar Icon (ICON_SMALL)
+    //  PebView's set_icon() only sends WM_SETICON+ICON_BIG.
+    //  Taskbar needs ICON_SMALL via a separate SendMessage.
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * Set window icons (title bar, taskbar, Alt+Tab).
+     *
+     * On Windows the taskbar icon comes from the *window class* small icon
+     * (GCLP_HICONSM / nIndex=-34 via SetClassLongPtrW), NOT from WM_SETICON.
+     *
+     * WM_SETICON+ICON_BIG controls Alt+Tab; WM_SETICON+ICON_SMALL controls the
+     * title bar.  We set all three to cover every surface.
+     */
+    private function setWindowIcons(string $iconPath): void
+    {
+        static $u32 = null;
+        static $s32 = null;
+        if ($u32 === null) {
+            $u32 = \FFI::cdef(
+                'void* SendMessageW(void* hWnd, unsigned int Msg, void* wParam, void* lParam);'
+                . 'void* SetClassLongPtrW(void* hWnd, int nIndex, void* dwNewLong);'
+                . 'int DestroyIcon(void* hIcon);',
+                'user32.dll',
+            );
+            $s32 = \FFI::cdef(
+                'unsigned int ExtractIconExW(void* lpszFile, int nIconIndex, void** phiconLarge, void** phiconSmall, unsigned int nIcons);',
+                'shell32.dll',
+            );
+        }
+
+        try {
+            $libui = \Libui\Ffi::get();
+            $hwnd = \FFI::cast('void*', $libui->uiControlHandle($this->window->asControl()));
+        } catch (\Throwable $e) {
+            self::debugLog("setWindowIcons: uiControlHandle failed: " . $e->getMessage());
+            return;
+        }
+
+        // Convert path to wchar_t*
+        $wide = \mb_convert_encoding($iconPath . "\0", 'UTF-16LE');
+        $pathPtr = \FFI::new("uint16_t[" . ((int)(\strlen($wide) / 2)) . "]");
+        \FFI::memcpy($pathPtr, $wide, \strlen($wide));
+
+        // ExtractIconExW extracts large+small icons with proper resolution matching.
+        $phLarge = \FFI::new('void*[1]');
+        $phSmall = \FFI::new('void*[1]');
+        $n = $s32->ExtractIconExW($pathPtr, 0, $phLarge, $phSmall, 1);
+        if ($n === 0) {
+            self::debugLog("setWindowIcons: ExtractIconExW returned 0");
+            return;
+        }
+
+        // 1. Set CLASS small icon → taskbar (GCLP_HICONSM = -34)
+        if (!\FFI::isNull($phSmall[0])) {
+            $u32->SetClassLongPtrW($hwnd, -34, $phSmall[0]);
+            self::debugLog("setWindowIcons: GCLP_HICONSM (-34) set → taskbar");
+        }
+
+        // 2. Set CLASS large icon → Alt+Tab fallback (GCLP_HICON = -14)
+        if (!\FFI::isNull($phLarge[0])) {
+            $u32->SetClassLongPtrW($hwnd, -14, $phLarge[0]);
+            self::debugLog("setWindowIcons: GCLP_HICON (-14) set");
+        }
+
+        // 3. WM_SETICON: ICON_SMALL → title bar, ICON_BIG → Alt+Tab
+        if (!\FFI::isNull($phSmall[0])) {
+            // WM_SETICON=0x0080, ICON_SMALL=null (0)
+            $u32->SendMessageW($hwnd, 0x0080, null, $phSmall[0]);
+        }
+        if (!\FFI::isNull($phLarge[0])) {
+            $u32->SendMessageW($hwnd, 0x0080, \FFI::cast('void*', 1), $phLarge[0]);
+            self::debugLog("setWindowIcons: WM_SETICON done");
+        }
+    }
+
+    public static function captureStdout(string $line): void
+    {
+        self::$stdoutBuffer[] = $line;
+    }
+
+    public static function getStdoutLines(): array
+    {
+        $lines = array_slice(self::$stdoutBuffer, self::$stdoutOffset);
+        self::$stdoutOffset = count(self::$stdoutBuffer);
+        return $lines;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -178,6 +301,45 @@ class WebViewUI
                 $wv->return($id, 0, json_encode($result));
             } catch (\Throwable $e) {
                 $wv->return($id, 0, json_encode(['ok' => false, 'error' => $e->getMessage()]));
+            }
+        });
+
+        // ─── Quick Compare Configs ────────────────────────────────
+
+        $wv->bind('getQuickCompares', function (string $id, string $req) use ($wv): void {
+            try {
+                $wv->return($id, 0, json_encode($this->store->listQuickCompares()));
+            } catch (\Throwable $e) {
+                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+            }
+        });
+
+        $wv->bind('saveQuickCompare', function (string $id, string $req) use ($wv): void {
+            try {
+                $params = json_decode($req, true);
+                $data = is_array($params) ? ($params[0] ?? $params) : [];
+                $name = trim($data['name'] ?? '');
+                $srcId = $data['srcId'] ?? '';
+                $tgtId = $data['tgtId'] ?? '';
+                if (!$name || !$srcId || !$tgtId) {
+                    $wv->return($id, 1, json_encode(['error' => '请填写名称并选择源库和目标库']));
+                    return;
+                }
+                $newId = $this->store->saveQuickCompare($name, $srcId, $tgtId);
+                $wv->return($id, 0, json_encode(['ok' => true, 'id' => $newId]));
+            } catch (\Throwable $e) {
+                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+            }
+        });
+
+        $wv->bind('deleteQuickCompare', function (string $id, string $req) use ($wv): void {
+            try {
+                $params = json_decode($req, true);
+                $qcId = is_array($params) ? ($params[0] ?? '') : '';
+                $ok = $this->store->deleteQuickCompare($qcId);
+                $wv->return($id, 0, json_encode(['ok' => $ok]));
+            } catch (\Throwable $e) {
+                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
             }
         });
 
@@ -332,6 +494,22 @@ class WebViewUI
                 } else {
                     $wv->return($id, 0, json_encode(['phase' => $this->comparePhase]));
                 }
+            } catch (\Throwable $e) {
+                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+            }
+        });
+
+        // ─── Cancel Compare ──────────────────────────────────────────
+
+        $wv->bind('cancelCompare', function (string $id, string $req) use ($wv): void {
+            try {
+                if ($this->currentRunner) {
+                    $this->currentRunner->cancel();
+                    self::debugLog("compare: 用户取消比对");
+                }
+                $this->comparePhase = 'idle';
+                $this->currentRunner = null;
+                $wv->return($id, 0, json_encode(['status' => 'cancelled']));
             } catch (\Throwable $e) {
                 $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
             }
@@ -495,6 +673,17 @@ class WebViewUI
                 $wv->return($id, 0, json_encode(['ok' => $ok]));
             } catch (\Throwable $e) {
                 $wv->return($id, 0, json_encode(['ok' => false, 'error' => $e->getMessage()]));
+            }
+        });
+
+        // ─── Stdout Capture ───────────────────────────────────────
+
+        $wv->bind('getStdout', function (string $id, string $req) use ($wv): void {
+            try {
+                $lines = self::getStdoutLines();
+                $wv->return($id, 0, json_encode(['lines' => $lines]));
+            } catch (\Throwable $e) {
+                $wv->return($id, 0, json_encode(['lines' => [], 'error' => $e->getMessage()]));
             }
         });
     }

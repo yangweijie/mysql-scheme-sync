@@ -13,6 +13,11 @@
     srcId: '',
     tgtId: '',
     isLoading: false,
+    terminalLines: [],
+    terminalAutoScroll: true,
+    terminalPollTimer: null,
+    terminalLastOffset: 0,
+    quickCompares: [],
   };
 
   // ════════════════════════════════════════════════════
@@ -23,15 +28,17 @@
     return window.__webview__.call(method, data);
   }
 
-  function showLoading(text) {
+  function showLoading(text, showCancel) {
     state.isLoading = true;
     document.getElementById('loadingText').textContent = text || '处理中...';
+    document.getElementById('loadingCancelBtn').style.display = showCancel ? 'inline-block' : 'none';
     document.getElementById('loadingOverlay').style.display = 'flex';
   }
 
   function hideLoading() {
     state.isLoading = false;
     document.getElementById('loadingOverlay').style.display = 'none';
+    document.getElementById('loadingCancelBtn').style.display = 'none';
   }
 
   function showError(msg) {
@@ -62,13 +69,17 @@
   //  Connections
   // ════════════════════════════════════════════════════
 
-  function loadConnections() {
+  function loadConnections(isInitialLoad) {
     showLoading('加载连接列表...');
     bridgeCall('getConnections').then(function(conns) {
       state.connections = conns || [];
       renderConnList();
       populateCompareSelects();
       hideLoading();
+      // Default page: if < 2 connections → stay on connections; if >= 2 → compare page
+      if (isInitialLoad && state.connections.length >= 2) {
+        switchPage('compare');
+      }
     }).catch(function(err) {
       showError('加载连接失败: ' + err);
     });
@@ -81,9 +92,12 @@
       return;
     }
     el.innerHTML = state.connections.map(function(c) {
-      return '<div class="conn-item" onclick="editConnection(\'' + c.id + '\')" data-id="' + c.id + '">' +
-        '<div class="conn-item-name">' + escHtml(c.name) + '</div>' +
-        '<div class="conn-item-detail">' + escHtml(c.host) + ':' + c.port + '/' + escHtml(c.database) + '</div>' +
+      return '<div class="conn-item" data-id="' + c.id + '">' +
+        '<div class="conn-item-info" onclick="editConnection(\'' + c.id + '\')">' +
+          '<div class="conn-item-row"><span class="conn-item-name">' + escHtml(c.name) + '</span><span class="conn-item-meta">' + c.port + ' · ' + escHtml(c.database) + '</span></div>' +
+          '<div class="conn-item-host">' + escHtml(c.host) + '</div>' +
+        '</div>' +
+        '<button class="conn-item-delete" onclick="event.stopPropagation();confirmDeleteConnection(\'' + c.id + '\',\'' + escHtml(c.name) + '\')" title="删除连接">✕</button>' +
         '</div>';
     }).join('');
   }
@@ -178,6 +192,50 @@
     });
   };
 
+  window.confirmDeleteConnection = function(id, name) {
+    var overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = '<div class="confirm-box">' +
+      '<h3>确认删除</h3>' +
+      '<p>确定要删除连接 <strong>' + escHtml(name) + '</strong> 吗？<br>此操作不可撤销。</p>' +
+      '<div class="confirm-actions">' +
+        '<button class="btn" onclick="this.closest(\'.confirm-overlay\').remove()">取消</button>' +
+        '<button class="btn btn-danger" id="confirmDeleteBtn">删除</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.getElementById('confirmDeleteBtn').addEventListener('click', function() {
+      overlay.remove();
+      deleteConnection(id);
+    });
+  };
+
+  function deleteConnection(id) {
+    showLoading('删除连接...');
+    bridgeCall('deleteConnection', id).then(function() {
+      return bridgeCall('getConnections');
+    }).then(function(conns) {
+      state.connections = conns || [];
+      renderConnList();
+      populateCompareSelects();
+      hideLoading();
+      document.getElementById('connFormTitle').textContent = '新建连接';
+      setVal('connEditId', '');
+      setVal('connName', '');
+      setVal('connHost', '127.0.0.1');
+      setVal('connPort', '3306');
+      setVal('connDatabase', '');
+      setVal('connUser', '');
+      setVal('connPassword', '');
+      document.getElementById('connStatus').textContent = '';
+    }).catch(function(err) {
+      hideLoading();
+      showError('删除失败: ' + err);
+    });
+  }
+
   // ════════════════════════════════════════════════════
   //  Compare
   // ════════════════════════════════════════════════════
@@ -194,13 +252,13 @@
       tgt.innerHTML += '<option value="' + c.id + '">' + label + '</option>';
     });
 
-    // Restore selection
     if (state.srcId) src.value = state.srcId;
     if (state.tgtId) tgt.value = state.tgtId;
+
+    populateQuickCompareSelect();
   }
 
   function loadComparePage() {
-    // Load settings
     bridgeCall('getSettings').then(function(s) {
       if (!s) return;
       document.getElementById('excludePatterns').value = s.excludePatterns || '';
@@ -211,6 +269,7 @@
     }).catch(function(err) {
       console.error('Failed to load settings:', err);
     });
+    loadQuickCompares();
   }
 
   window.swapConnections = function() {
@@ -221,6 +280,107 @@
     tgt.value = tmp;
     state.srcId = src.value;
     state.tgtId = tgt.value;
+  };
+
+  function loadQuickCompares() {
+    return bridgeCall('getQuickCompares').then(function(list) {
+      state.quickCompares = list || [];
+      populateQuickCompareSelect();
+    });
+  }
+
+  function populateQuickCompareSelect() {
+    var sel = document.getElementById('quickCompareSelect');
+    sel.innerHTML = '<option value="">— 选择快速对比配置 —</option>';
+    state.quickCompares.forEach(function(qc) {
+      var srcConn = state.connections.find(function(c) { return c.id === qc.srcId; });
+      var tgtConn = state.connections.find(function(c) { return c.id === qc.tgtId; });
+      var label = escHtml(qc.name);
+      if (srcConn && tgtConn) {
+        label += ' (' + escHtml(srcConn.name) + ' → ' + escHtml(tgtConn.name) + ')';
+      }
+      sel.innerHTML += '<option value="' + qc.id + '">' + label + '</option>';
+    });
+  }
+
+  window.loadQuickCompare = function() {
+    var sel = document.getElementById('quickCompareSelect');
+    var qcId = sel.value;
+    var delBtn = document.getElementById('quickCompareDelBtn');
+    if (!qcId) {
+      delBtn.style.display = 'none';
+      return;
+    }
+    delBtn.style.display = 'inline-block';
+    var qc = state.quickCompares.find(function(q) { return q.id === qcId; });
+    if (!qc) return;
+    var src = document.getElementById('srcSelect');
+    var tgt = document.getElementById('tgtSelect');
+    if (src.querySelector('option[value="' + qc.srcId + '"]')) {
+      src.value = qc.srcId;
+      state.srcId = qc.srcId;
+    }
+    if (tgt.querySelector('option[value="' + qc.tgtId + '"]')) {
+      tgt.value = qc.tgtId;
+      state.tgtId = qc.tgtId;
+    }
+  };
+
+  window.deleteQuickCompare = function() {
+    var sel = document.getElementById('quickCompareSelect');
+    var qcId = sel.value;
+    if (!qcId) return;
+    var qc = state.quickCompares.find(function(q) { return q.id === qcId; });
+    var name = qc ? qc.name : qcId;
+    if (!confirm('确认删除快速对比配置「' + name + '」？')) return;
+    bridgeCall('deleteQuickCompare', qcId).then(function() {
+      loadQuickCompares();
+    });
+  };
+
+  window.showSaveQuickCompareDialog = function() {
+    var srcId = document.getElementById('srcSelect').value;
+    var tgtId = document.getElementById('tgtSelect').value;
+    if (!srcId || !tgtId) {
+      alert('请先选择源库和目标库');
+      return;
+    }
+    var srcConn = state.connections.find(function(c) { return c.id === srcId; });
+    var tgtConn = state.connections.find(function(c) { return c.id === tgtId; });
+    var defaultName = (srcConn ? srcConn.name : '') + ' → ' + (tgtConn ? tgtConn.name : '');
+
+    var overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = '<div class="confirm-box">'
+      + '<h3 style="margin:0 0 12px;">保存快速对比</h3>'
+      + '<label style="display:block;font-size:12px;color:var(--text-secondary);margin-bottom:4px;">快速对比名称</label>'
+      + '<input type="text" class="input" id="qcSaveName" value="' + escHtml(defaultName) + '" style="width:100%;margin-bottom:12px;">'
+      + '<div style="display:flex;gap:8px;justify-content:flex-end;">'
+      + '<button class="btn btn-secondary" id="qcSaveCancel">取消</button>'
+      + '<button class="btn btn-primary" id="qcSaveConfirm">保存</button>'
+      + '</div></div>';
+    document.body.appendChild(overlay);
+
+    var nameInput = overlay.querySelector('#qcSaveName');
+    nameInput.focus();
+    nameInput.select();
+
+    overlay.querySelector('#qcSaveCancel').onclick = function() { overlay.remove(); };
+    overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+    overlay.querySelector('#qcSaveConfirm').onclick = function() {
+      var name = nameInput.value.trim();
+      if (!name) { alert('请输入名称'); return; }
+      bridgeCall('saveQuickCompare', {name: name, srcId: srcId, tgtId: tgtId}).then(function(result) {
+        if (result && result.error) { alert('保存失败: ' + result.error); return; }
+        overlay.remove();
+        loadQuickCompares().then(function() {
+          var sel = document.getElementById('quickCompareSelect');
+          if (result && result.id) sel.value = result.id;
+          loadQuickCompare();
+        });
+      });
+    };
   };
 
   window.startCompare = function() {
@@ -251,7 +411,7 @@
 
     var params = {srcId: srcId, tgtId: tgtId, excludePatterns: patterns, compareScope: scope};
 
-    showLoading('正在比对...\n连接数据库并获取表结构中，请稍候');
+    showLoading('正在比对...\n连接数据库并获取表结构中，请稍候', true);
     bridgeCall('compare', params).then(function(result) {
       if (!result || result.error) {
         hideLoading();
@@ -303,7 +463,20 @@
         showError('查询比对状态失败: ' + err);
       });
     }, 300);
+    state.comparePollTimer = timer;
   }
+
+  window.cancelCompare = function() {
+    if (state.comparePollTimer) {
+      clearInterval(state.comparePollTimer);
+      state.comparePollTimer = null;
+    }
+    bridgeCall('cancelCompare').then(function() {
+      hideLoading();
+    }).catch(function() {
+      hideLoading();
+    });
+  };
 
   // ════════════════════════════════════════════════════
   //  Diff Results
@@ -458,6 +631,68 @@
   };
 
   // ════════════════════════════════════════════════════
+  //  Terminal / Stdout
+  // ════════════════════════════════════════════════════
+
+  window.clearTerminal = function() {
+    state.terminalLines = [];
+    state.terminalLastOffset = 0;
+    document.getElementById('terminalOutput').innerHTML = '';
+    document.getElementById('terminalLineCount').textContent = '0 行';
+  };
+
+  window.toggleAutoScroll = function() {
+    state.terminalAutoScroll = !state.terminalAutoScroll;
+    var btn = document.getElementById('terminalAutoScrollBtn');
+    btn.textContent = '📌 自动滚动: ' + (state.terminalAutoScroll ? '开' : '关');
+  };
+
+  function pollTerminal() {
+    bridgeCall('getStdout').then(function(result) {
+      if (result && result.lines && result.lines.length > 0) {
+        var output = document.getElementById('terminalOutput');
+        var wasAtBottom = output.scrollHeight - output.scrollTop - output.clientHeight < 30;
+
+        result.lines.forEach(function(line) {
+          var div = document.createElement('div');
+          div.className = 'log-line';
+          var tsMatch = line.match(/^\[(\d{2}:\d{2}:\d{2}\.\d{3})\]\s*\[(\w+)\]\s*(.*)$/);
+          if (tsMatch) {
+            div.innerHTML = '<span class="log-ts">[' + escHtml(tsMatch[1]) + ']</span> ' +
+              '<span class="log-level log-level-' + tsMatch[2].toLowerCase() + '">[' + escHtml(tsMatch[2]) + ']</span> ' +
+              escHtml(tsMatch[3]);
+          } else {
+            div.textContent = line;
+          }
+          output.appendChild(div);
+          state.terminalLines.push(line);
+        });
+
+        document.getElementById('terminalLineCount').textContent = state.terminalLines.length + ' 行';
+
+        if (state.terminalAutoScroll && wasAtBottom) {
+          output.scrollTop = output.scrollHeight;
+        }
+
+        var dot = document.getElementById('terminalDot');
+        if (dot) dot.style.display = 'inline';
+      }
+    }).catch(function() {});
+  }
+
+  function startTerminalPoll() {
+    if (state.terminalPollTimer) return;
+    state.terminalPollTimer = setInterval(pollTerminal, 500);
+  }
+
+  function stopTerminalPoll() {
+    if (state.terminalPollTimer) {
+      clearInterval(state.terminalPollTimer);
+      state.terminalPollTimer = null;
+    }
+  }
+
+  // ════════════════════════════════════════════════════
   //  Utilities
   // ════════════════════════════════════════════════════
 
@@ -474,10 +709,10 @@
   document.getElementById('app').style.display = 'flex';
   document.getElementById('app-loader').style.display = 'none';
 
-  // Load connections on startup
   setTimeout(function() {
-    loadConnections();
+    loadConnections(true);
     loadComparePage();
+    startTerminalPoll();
   }, 100);
 
 })();

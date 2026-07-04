@@ -148,6 +148,36 @@ class ConfigStore
         return $result !== false ? $result : '';
     }
 
+    // ── Quick Compare Configs ────────────────────────────────────
+
+    /**
+     * @return array<array{id:string, name:string, srcId:string, tgtId:string}>
+     */
+    public function listQuickCompares(): array
+    {
+        return $this->settings['quickCompares'] ?? [];
+    }
+
+    public function saveQuickCompare(string $name, string $srcId, string $tgtId): string
+    {
+        $id = bin2hex(random_bytes(8));
+        $list = $this->settings['quickCompares'] ?? [];
+        $list[] = ['id' => $id, 'name' => $name, 'srcId' => $srcId, 'tgtId' => $tgtId];
+        $this->settings['quickCompares'] = $list;
+        $this->save();
+        return $id;
+    }
+
+    public function deleteQuickCompare(string $id): bool
+    {
+        $list = $this->settings['quickCompares'] ?? [];
+        $new = array_values(array_filter($list, fn($item) => $item['id'] !== $id));
+        if (count($new) === count($list)) return false;
+        $this->settings['quickCompares'] = $new;
+        $this->save();
+        return true;
+    }
+
     // ── Import / Export ──────────────────────────────────────────
 
     public function exportJson(): string

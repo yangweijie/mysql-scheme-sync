@@ -1,106 +1,110 @@
 # MySQL SchemaSync — AGENTS.md
 
-> PHP 8.5+ FFI/libui 原生桌面 GUI：MySQL 数据库结构对比 + 迁移 SQL 生成。
+> PHP 8.5+ FFI/libui native desktop GUI: MySQL database structure diff + migration SQL generation.
 
-## 快速命令
+## Quick Commands
 
 ```bash
-composer85 install              # 安装依赖
-php85 bin/mysql-schema-sync.php  # 运行 GUI
+composer install                       # install deps
+php bin/mysql-schema-sync.php          # run GUI (requires ext-ffi)
+start.bat / start.sh                   # cross-platform launcher (tries php85, then php)
 ```
 
-PHP 8.5 路径：`/Users/jay/Library/PhpWebStudy/alias/php85` （macOS Homebrew 安装）。
+PHP 8.5 path (macOS Homebrew): `/Users/jay/Library/PhpWebStudy/alias/php85`
 
-## 技术栈
+## CLI Utilities
 
-- **GUI**: `helgesverre/libui` (dev-main) — PHP FFI 绑定 libui-ng 原生桌面控件 + WebViewUI (WebView2/WebKit)
-- **UI 扩展**: `yangweijie/ui2` — MessageBox、DialogConfirm 等对话框
-- **异步查询**: `yangweijie/think-orm-async` — 异步 MySQLi 查询包装
-- **PHP 扩展依赖**: `ext-ffi`, `ext-pdo`, `ext-pdo_mysql`, `ext-openssl`, `ext-mysqli`
+```bash
+php bin/dump-schema.php [conn_name] [-o out.json]   # export DB schema to JSON
+php bin/compare-offline.php src.json tgt.json        # offline diff (no DB connection)
+php bin/benchmark-async.php [conn_name]              # benchmark async query strategies
+```
 
-## 项目结构
+## Tech Stack
+
+- **GUI**: `helgesverre/libui` (dev-main) — PHP FFI bindings for libui-ng native desktop controls
+- **WebView**: `yangweijie/ui2` — WebViewUI (WebView2/WebKit) + native dialogs (MessageBox, DialogConfirm)
+- **Async queries**: `yangweijie/think-orm-async` — AsyncContext for parallel mysqli queries
+- **Required PHP extensions**: `ext-ffi`, `ext-pdo`, `ext-pdo_mysql`, `ext-openssl`, `ext-mysqli`
+- **No external comparison library** — `StructSyncAdapter` + `DDLDefinitionParser` is fully self-contained
+
+## Project Structure
 
 ```
-bin/mysql-schema-sync.php       # 入口：初始化 FFI + ConfigStore → WebViewUI
+bin/
+  mysql-schema-sync.php         # GUI entry: FFI init + DllBootstrap + WebViewUI
+  dump-schema.php               # CLI: export DB schema to JSON
+  compare-offline.php           # CLI: diff two JSON dumps
+  benchmark-async.php           # CLI: benchmark async strategies
 src/
-  Config/Connection.php          # 连接数据类（id/name/host/port/user/password/database）
-  Config/ConfigStore.php         # 连接管理 + AES-256-GCM 加密持久化到 ~/.mysql-schema-sync/
-  Diff/DiffResult.php            # 差异结果纯数据结构（17 种差异类型的 array）
-  Diff/StructSyncAdapter.php     # 比对逻辑：fetchStructures → buildDiffSql（含 5 种高级对象）
-  Diff/AsyncStructureFetcher.php # 基于 think-orm-async 的并发 SHOW CREATE TABLE
-  Gui/WebViewUI.php              # WebView2/WebKit 主窗口 + 桥接 JS ↔ PHP
-  Gui/assets/                    # 前端资源（app.html/css/js/init.js，通过 file_get_contents 加载）
-  SqlGen/Generator.php           # 基于 diffSql 生成最终迁移 SQL
+  Config/
+    Connection.php              # Data class (id/name/host/port/user/password/database)
+    ConfigStore.php             # Connection CRUD + AES-256-GCM encrypted persistence (~/.mysql-schema-sync/)
+  Diff/
+    StructSyncAdapter.php       # Core comparison engine (Navicat-style 4-phase algorithm)
+    DDLDefinitionParser.php     # Semantic DDL column comparison (field-level diffs)
+    AsyncStructureFetcher.php   # Batch SHOW CREATE TABLE via think-orm-async AsyncContext
+    AsyncCompareRunner.php      # Non-blocking compare runner (work-queue for UI responsiveness)
+    DiffResult.php              # Diff result data structure (17 diff types)
+  SqlGen/
+    Generator.php               # Generate final migration SQL from diffSql + structuredDiffs
+  Gui/
+    WebViewUI.php               # WebView2/WebKit main window + JS↔PHP bridge
+    DllBootstrap.php            # Auto-restore native DLLs from bridge/ backup
+    assets/                     # Frontend: app.html, app.css, app.js, init.js (loaded via file_get_contents)
+bridge/                         # Native library backups (libui, webview_bridge, PebView, etc.)
+stubs/think/                    # Minimal ThinkPHP stubs (Collection, db\Fetch, db\BaseQuery) for think-orm-async
 ```
 
-## 关键架构事实
+## Key Architecture
 
-### 比对流程（StructSyncAdapter）
-1. `fetchAll(excludePatterns)` → `AsyncStructureFetcher` 并发获取两张库的 `SHOW CREATE TABLE`
-2. `compare(excludePatterns)` → 调用 `buildDiffSql()` 生成 `ADD_TABLE/DROP_TABLE/MODIFY_FIELD/ADD_FIELD/DROP_FIELD/ADD_CONSTRAINT/DROP_CONSTRAINT/ADD_VIEW/...` 分组的 SQL 数组
-3. 结果包装为 `DiffResult`（17 种差异类型各自独立 `array`）
+### Comparison Flow (StructSyncAdapter + DDLDefinitionParser)
+1. `AsyncCompareRunner` orchestrates the work-queue: list tables → fetch each via AsyncContext → compare
+2. `StructSyncAdapter.compare()` calls `buildDiffSql()` using a Navicat-style algorithm:
+   - Phase 1: Table name set diff → ADD_TABLE, DROP_TABLE, CANDIDATE
+   - Phase 2: DDLDefinitionParser semantic column/constraint comparison (catches charset, collation, ON UPDATE, etc.)
+3. Result packaged as `DiffResult` (17 diff types, each independent array)
+4. `Generator` merges ALTERs and produces final SQL
 
-### 重要：库的方向问题
-`9raxdev/mysql-struct-sync` 的构造函数参数顺序是 `(self=目标库, refer=源库)`，但生成 SQL 的 ADD/DROP 方向与用户预期相反。**StructSyncAdapter 内部已 swap source/target 解决此问题**。
+### Direction: source vs target
+- `source` = the "new" schema (user's desired state)
+- `target` = the "old" schema (to be synced)
+- Generated SQL makes target = source (ADD columns in target, DROP columns not in source)
 
-### macOS libui Table 坑
-`Libui\Table` 必须在 `Window::show()` 之前创建，否则 macOS NSTableView 的 `cellValue()` 永远不会被调用。`MainWindow::run()` 中在 `show()` 之前调用了 `createResultAreaControls()` 创建空 Table。
+### DllBootstrap (Native Library Recovery)
+After `composer update` or `git clean`, vendor DLLs may be wiped. `DllBootstrap::ensure()` copies missing native libraries from `bridge/` to vendor paths. Runs automatically at startup.
 
-### 异步与 UI 阻塞
-- `Loop::delay(ms, cb)` 用于将耗时操作推迟到下一个事件循环 tick
-- PHP 单线程：同步数据库查询期间 UI 完全阻塞
-- 进度条通过库的 `on_phase`/`on_progress` 回调更新
-- `ProgressBar::setValue(-1)` = 不确定模式（来回滚动）
-- 取消按钮在同步比对期间无效（库调用无法中断）
+### Async Work Queue (AsyncCompareRunner)
+- PHP is single-threaded; `Loop::delay(ms, cb)` defers each query to the next event loop tick
+- Work queue: `listTables()` → enqueue each table → `fetchOneTable()` per tick → `compare()`
+- Advanced objects (VIEW/TRIGGER/EVENT/FUNCTION/PROCEDURE) fetched the same way
+- Cancel button works between work-queue steps, not during individual queries
 
-### 异步并发查询（AsyncStructureFetcher + think-orm-async）
-- 每张库内部的 `SHOW CREATE TABLE` 通过 `yangweijie/think-orm-async` 的 `AsyncContext::start()/query()/end()` 并行执行
-- 默认每批 50 个表，每批内所有表通过 `AsyncContext` 单连接并行查询
-- 每个批次使用 1 个连接（vs 旧版每个表 1 个连接，大幅降低连接开销）
-- 两个数据库之间的查询是顺序的（不是真正的双库并发）
-- 高级对象（VIEW/TRIGGER/EVENT/FUNCTION/PROCEDURE）的 SHOW CREATE 查询同样通过 `AsyncContext` 并行化
+### Config Storage
+- Directory: `~/.mysql-schema-sync/`
+- Key: `~/.mysql-schema-sync/.key` (32 bytes random, auto-generated)
+- Config: `~/.mysql-schema-sync/config.json` (passwords AES-256-GCM encrypted)
+- Password format: `base64(IV(12) + tag(16) + ciphertext)`
 
-### 排除表过滤
-- 用户输入逗号分隔的 glob 模式（如 `*_bak, *_backup*, tmp_*`）
-- 存储到 `config.json` 的 `settings.excludePatterns`
-- 传递给 `9raxdev/mysql-struct-sync` 库做 SQL 层 `WHERE` 过滤 + PHP 层 `fnmatch` 兜底
+### Exclusion Filtering
+- User enters comma-separated glob patterns (e.g. `*_bak, *_backup*, tmp_*`)
+- Stored in `config.json` → `settings.excludePatterns`
+- Passed to StructSyncAdapter for SQL-layer `WHERE` filtering + PHP `fnmatch` fallback
 
-### 配置存储
-- 目录：`~/.mysql-schema-sync/`
-- 加密密钥：`~/.mysql-schema-sync/.key`（32 bytes random，自动生成）
-- 配置：`~/.mysql-schema-sync/config.json`（密码用 AES-256-GCM 加密）
-- 密码加密：`random_bytes(12) IV + openssl_encrypt('aes-256-gcm')`，存储格式 `base64(IV(12) + tag(16) + ciphertext)`
+## Gotchas
 
-### 剪贴板复制
-- macOS：`shell_exec("echo '{$escaped}' | pbcopy")`
-- Windows：`shell_exec('clip < "' . $tmp . '"')`
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| UI freezes during compare | Synchronous DB queries on main thread | Work-queue architecture: one query per Loop::delay tick |
+| Native DLLs missing after composer update | Vendor cleaned by composer | DllBootstrap auto-restores from bridge/ at startup |
+| Table shows no data on macOS | libui Table created after Window::show() | All Tables must be created before show() (handled in WebViewUI) |
+| SQL has double semicolons | raw SQL already has `;`, Generator appends another | Generator uses `rtrim($sql, ';')` |
+| Connection ID conflicts | Previously used name as ID | Now uses `random_bytes(8)` hex |
 
-## 常见陷阱
+## Testing
 
-| 问题 | 原因 | 解决 |
-|------|------|------|
-| 比对方向反了 | 库的 ADD/DROP 语义与直觉相反 | StructSyncAdapter 已处理，勿再手动 swap |
-| Table 不显示数据 | macOS 上 Table 在 show() 后创建 | 确保所有 Table 都在 show() 前创建 |
-| UI 卡死 | 同步数据库查询阻塞主线程 | 已通过 work-queue 架构缓解（每张表一个 Loop::delay 步骤） |
-| 连接 ID 冲突 | 之前用 name 做 ID | 已改为 `random_bytes(8)` hex |
-| Schema.php 中的代码 | 旧的自实现比对，已废弃 | 已删除 |
-| 生成 SQL 双分号 | raw SQL 已含 `;`，Generator 再追加 | 已用 `rtrim($sql, ';')` 修复 8 处 |
-
-## 依赖库
-
-- `helgesverre/libui` 很新（2026-06），API 可能变化
-- `yangweijie/ui2` 提供原生对话框包装（MessageBox::info/error/warning, DialogConfirm::ask）
-
-## 测试
-
-无自动化测试。手动测试方法：
-1. 准备两个 MySQL 数据库（一个代表源结构，一个代表目标结构）
-2. 修改源库的表结构
-3. 运行 `php85 bin/mysql-schema-sync.php` 比对
-4. 检查差异表格和生成的 SQL 是否符合预期
-
-## 技术债务
-
-- `Generator` 主要依赖 `adapter->getDiffSql()` 做 SQL 生成，间接依赖多
-- `MainWindow` 两个不同路径（主窗口内嵌 table 和弹出新窗口）有大量重复逻辑
-- 无法测试：没有 mock 数据库连接的测试设施
+No automated tests. Manual test:
+1. Set up two MySQL databases (source structure + target structure)
+2. Modify the source database schema
+3. Run `php bin/mysql-schema-sync.php` and compare
+4. Verify the diff table and generated SQL match expectations
