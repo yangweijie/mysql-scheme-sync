@@ -16,6 +16,11 @@ class ConfigStore
     /** @var array<string, mixed> */
     public array $settings = [];
 
+    public function getDir(): string
+    {
+        return $this->configDir;
+    }
+
     public function __construct()
     {
         $home = $_SERVER['HOME'] ?? $_SERVER['USERPROFILE'] ?? getenv('HOME') ?: getenv('USERPROFILE');

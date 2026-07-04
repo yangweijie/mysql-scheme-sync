@@ -37,12 +37,11 @@
 - [x] 比对期间 UI 完全不阻塞（子进程方案）
 - [x] 取消按钮实际生效（子进程方案）
 
-### Phase 8: UI 阻塞优化 ⬜
-- [ ] 创建 `bin/compare-worker.php` — CLI 子进程入口（解析参数、运行比对、写状态文件）
-- [ ] 创建 `src/Worker/WorkerIPC.php` — 状态文件读写工具类
-- [ ] 修改 `MainWindow::onCompare()` — 用 proc_open 启动子进程 + Loop::delay 轮询
-- [ ] 修改取消按钮逻辑 — 写入取消标志文件而非调用 adapter->cancel()
-- [ ] 验证：比对期间 UI 流畅、进度条更新、取消按钮有效
+### Phase 8: UI 阻塞优化 ✅
+- [x] AsyncCompareRunner 工作队列架构（每个 SHOW CREATE TABLE 独立步骤）
+- [x] WebViewUI 非阻塞 compare bridge（立即返回 + JS 轮询）
+- [x] JS 轮询 getCompareResult() 每 300ms 检查状态
+- [ ] 取消按钮在库同步调用期间无法生效（需配合子进程方案）
 
 ### Phase 5: 文档 ✅
 - [x] 创建 AGENTS.md — 为 OpenCode 会话编制的紧凑指令文件
@@ -86,6 +85,35 @@
 - [x] 保存/删除后同步主窗口下拉框（refreshConnectionLists）
 - [x] 弹窗相对父窗口居中（`Window::centeredOn()` 代替手动 buggy 计算）
 
+### Phase 11: Generator 双分号修复 ✅
+- [x] 修复 8 处 `rtrim($sql, ';')` 前未去除已有分号导致 `;;` 输出
+
+### Phase 12: WebViewUI 重构 ✅
+- [x] 提取内联 HTML/CSS/JS 到 `src/Gui/assets/` 独立文件
+- [x] `app.css` (10KB) — 所有 CSS 样式
+- [x] `app.html` (9KB) — HTML 模板（`{{CSS}}`, `{{INIT_JS}}`, `{{APP_JS}}` 占位符）
+- [x] `app.js` (19KB) — 所有 JavaScript 应用代码
+- [x] `init.js` (473B) — WebView bridge 初始化脚本
+- [x] `WebViewUI.php` 改用 `file_get_contents()` 加载 4 个资源文件
+
+### Phase 13: Schema Dump 文件位置修复 ✅
+- [x] `ConfigStore::getDir()` 公开方法
+- [x] `bin/dump-schema.php` 默认输出改为 `~/.mysql-schema-sync/dumps/`
+- [x] 迁移已有 schema dump 文件到用户配置目录
+
+### Phase 14: 调试输出 ✅
+- [x] `debugLog()` / `debugLogException()` 静态方法
+- [x] 默认启用调试，带时间戳输出到 STDOUT
+- [x] 错误详情存入 `$compareError` 并通过 `getCompareResult` bridge 返回
+
+### Phase 15: UI 阻塞修复（工作队列架构）✅
+- [x] AsyncCompareRunner 重构为工作队列架构（`$workQueue` + `dequeueAndRun()`）
+- [x] `listTables()` 查询表名列表，为每张表入队独立步骤
+- [x] `fetchOneTable()` 单表 SHOW CREATE TABLE 查询
+- [x] `listAdvanced()` 查询高级对象列表，为每个对象入队独立步骤
+- [x] `fetchOneAdvanced()` 单对象 SHOW CREATE 查询
+- [x] 步骤间 delay 1ms，每个步骤只查一条 SQL，事件循环可处理 WebView2 事件
+
 ## 技术决策
 | 决策 | 原因 |
 |------|------|
@@ -99,6 +127,8 @@
 | `think\Collection` 轻量存根 | think-orm-async 运行时需要，但无 ThinkPHP 依赖 |
 | DDLDefinitionParser 语义解析替代 `!==` | Navicat 算法要求字段级语义 diff（charset/collation/ON UPDATE 等） |
 | ALTER TABLE 合并 | Navicat §5.2：同一表的多个变更合并为一条 ALTER，减少网络往返 |
+| 工作队列架构替代固定步骤列表 | 每个 SHOW CREATE TABLE 独立步骤，事件循环可处理 WebView2 事件，UI 不卡死 |
+| JS 轮询 getCompareResult 每 300ms | 比对结果通过桥接函数异步返回，JS 定时检查状态 |
 
 ## 错误记录
 | 错误 | 原因 | 修复 |
@@ -112,3 +142,7 @@
 | 自实现比较逻辑差异多 | 库的 _array_intersect_assoc 行为不同 | 直接调用库的 baseDiff/advanceDiff |
 | 358/125/80 处差异 | 自己的比较逻辑与库不一致 | 放弃自实现，直接包装库方法 |
 | Call to undefined method setExcludePatterns() | 库缺少排除过滤方法 | 在 MysqlStructSync 中添加 setExcludePatterns/matchesExclude/buildSqlExclude + 拆分 fetch/compare 方法 |
+| Typed property $src must not be accessed before initialization | startStepByStep 未接收 Connection 参数 | 改为接收 $src/$tgt 参数 |
+| 比对期间 UI 卡死 | syncFetchTables 在单个回调内跑 100+ 查询 | 工作队列架构，每个查询独立步骤 |
+| 输出 SQL 双分号 `;;` | raw SQL 已含 `;`，Generator 再追加 | 8 处 `rtrim($sql, ';')` 修复 |
+| Schema dump 文件在项目根目录 | `getcwd()` 指向项目根 | 改为 `$store->getDir() . '/dumps/'` |

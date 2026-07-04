@@ -102,7 +102,7 @@ class Generator
             if (isset($dropFKTableSkip[$table])) continue;
 
             if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+CONSTRAINT\s+`(\w+)`/is", $sql, $m)) {
-                $lines[] = $sql . ';';
+                $lines[] = rtrim($sql, ';') . ';';
             }
         }
 
@@ -116,7 +116,7 @@ class Generator
                 $table = $m[1];
                 $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
                 if (isset($removedIndexMap[$table][$idxName])) {
-                    $lines[] = $sql . ';';
+                    $lines[] = rtrim($sql, ';') . ';';
                 }
             }
         }
@@ -144,7 +144,7 @@ class Generator
             $name = preg_match('/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?/i', $sql, $m) ? $m[1] : null;
             if ($name && isset($removedTables[$name])) {
                 $lines[] = "-- [HIGH] DROP TABLE `{$name}`";
-                $lines[] = $sql . ";";
+                $lines[] = rtrim($sql, ';') . ";";
             }
         }
         if (!empty($diffSql['DROP_TABLE'])) $lines[] = "";
@@ -226,14 +226,14 @@ class Generator
 
         // ─── 5. CREATE VIEW (depends on tables) ───────────────────────
         foreach ($diffSql['ADD_VIEW'] ?? [] as $sql) {
-            $lines[] = $sql . ";";
+            $lines[] = rtrim($sql, ';') . ";";
         }
         if (!empty($diffSql['ADD_VIEW'])) $lines[] = "";
 
         // ─── 6. CREATE PROCEDURE/FUNCTION/TRIGGER/EVENT ────────────────
         foreach (['ADD_PROCEDURE', 'ADD_FUNCTION'] as $addType) {
             foreach ($diffSql[$addType] ?? [] as $sql) {
-                $lines[] = $sql . ";";
+                $lines[] = rtrim($sql, ';') . ";";
             }
         }
         if (!empty($diffSql['ADD_PROCEDURE']) || !empty($diffSql['ADD_FUNCTION'])) $lines[] = "";
@@ -248,10 +248,10 @@ class Generator
                 $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
 
                 if ($type === 'MODIFY_VIEW') {
-                    $lines[] = preg_replace('/^CREATE\s/', 'CREATE OR REPLACE ', $sql) . ";";
+                    $lines[] = rtrim(preg_replace('/^CREATE\s/', 'CREATE OR REPLACE ', $sql), ';') . ";";
                 } else {
                     $lines[] = "DROP {$objType} IF EXISTS `{$name}`;";
-                    $lines[] = $sql . ";";
+                    $lines[] = rtrim($sql, ';') . ";";
                 }
             }
             $lines[] = "";
@@ -259,13 +259,13 @@ class Generator
 
         // ─── 8. ADD TRIGGER ──────────────────────────────────────────
         foreach ($diffSql['ADD_TRIGGER'] ?? [] as $sql) {
-            $lines[] = $sql . ";";
+            $lines[] = rtrim($sql, ';') . ";";
         }
         if (!empty($diffSql['ADD_TRIGGER'])) $lines[] = "";
 
         // ─── 9. ADD EVENT ────────────────────────────────────────────
         foreach ($diffSql['ADD_EVENT'] ?? [] as $sql) {
-            $lines[] = $sql . ";";
+            $lines[] = rtrim($sql, ';') . ";";
         }
         if (!empty($diffSql['ADD_EVENT'])) $lines[] = "";
 

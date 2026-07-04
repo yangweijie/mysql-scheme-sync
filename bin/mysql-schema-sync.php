@@ -7,7 +7,7 @@ require __DIR__ . '/../vendor/autoload.php';
 
 use Libui\Ffi;
 use MySqlSchemaSync\Config\ConfigStore;
-use MySqlSchemaSync\Gui\MainWindow;
+use MySqlSchemaSync\Gui\WebViewUI;
 
 if (!class_exists('FFI')) {
     fwrite(STDERR, "PHP FFI 扩展未启用。请使用 PHP CLI 并启用 ext-ffi。\n");
@@ -17,7 +17,7 @@ if (!class_exists('FFI')) {
 try {
     Ffi::init();
     $store = new ConfigStore();
-    $app = new MainWindow($store);
+    $app = new WebViewUI($store);
     $app->run();
 } catch (\Throwable $e) {
     fwrite(STDERR, "启动失败：" . $e->getMessage() . "\n");

@@ -639,4 +639,7 @@ class StructSyncAdapter
     {
         return preg_replace('/\s+USING\s+(?:BTREE|HASH)\b/i', '', $line);
     }
+
+    public function getSource(): Connection { return $this->source; }
+    public function getTarget(): Connection { return $this->target; }
 }

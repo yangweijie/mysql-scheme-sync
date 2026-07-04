@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MySQL SchemaSync</title>
+<style>{{CSS}}</style>
+<script>{{INIT_JS}}</script>
+</head>
+<body>
+<div id="app-loader"><div class="spinner"></div><div class="loader-text">加载中...</div></div>
+
+<div id="app" style="display:none;">
+  <!-- ── Sidebar ── -->
+  <aside id="sidebar">
+    <div class="sidebar-header">
+      <div class="sidebar-logo">⚡</div>
+      <div class="sidebar-title">SchemaSync</div>
+    </div>
+    <nav class="sidebar-nav">
+      <a class="nav-item active" data-page="connections" onclick="switchPage('connections')">
+        <span class="nav-icon">🔌</span> 连接管理
+      </a>
+      <a class="nav-item" data-page="compare" onclick="switchPage('compare')">
+        <span class="nav-icon">🔄</span> 结构对比
+      </a>
+      <a class="nav-item" data-page="results" onclick="switchPage('results')">
+        <span class="nav-icon">📋</span> 差异结果
+        <span class="nav-badge" id="resultBadge" style="display:none;">0</span>
+      </a>
+      <a class="nav-item" data-page="sql" onclick="switchPage('sql')">
+        <span class="nav-icon">📄</span> SQL 预览
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="sidebar-version">v1.0</div>
+    </div>
+  </aside>
+
+  <!-- ── Main Content ── -->
+  <main id="main-content">
+
+    <!-- ════ Connections Page ════ -->
+    <div id="page-connections" class="page active">
+      <div class="page-header">
+        <h2><span class="page-icon">🔌</span> 连接管理</h2>
+        <p class="page-desc">管理 MySQL 数据库连接</p>
+      </div>
+      <div class="page-body connections-layout">
+        <!-- Left: connection list -->
+        <div class="conn-list-panel">
+          <div class="panel-header">
+            <h3>已有连接</h3>
+            <button class="btn btn-sm btn-primary" onclick="showNewConnectionForm()">+ 新建</button>
+          </div>
+          <div class="conn-list" id="connList"></div>
+        </div>
+        <!-- Right: connection form -->
+        <div class="conn-form-panel">
+          <div class="panel-header">
+            <h3 id="connFormTitle">新建连接</h3>
+          </div>
+          <div class="conn-form" id="connForm">
+            <input type="hidden" id="connEditId" value="">
+            <div class="form-row">
+              <label>连接名称</label>
+              <input type="text" id="connName" class="input" placeholder="例如：本地开发库">
+            </div>
+            <div class="form-row">
+              <label>主机</label>
+              <input type="text" id="connHost" class="input" value="127.0.0.1" placeholder="127.0.0.1">
+            </div>
+            <div class="form-row form-row-half">
+              <div>
+                <label>端口</label>
+                <input type="number" id="connPort" class="input" value="3306" placeholder="3306">
+              </div>
+              <div>
+                <label>默认数据库</label>
+                <input type="text" id="connDatabase" class="input" placeholder="数据库名">
+              </div>
+            </div>
+            <div class="form-row form-row-half">
+              <div>
+                <label>用户名</label>
+                <input type="text" id="connUser" class="input" placeholder="root">
+              </div>
+              <div>
+                <label>密码</label>
+                <input type="password" id="connPassword" class="input" placeholder="密码">
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" onclick="saveConnection()">💾 保存</button>
+              <button class="btn" onclick="testConnection()">🔌 测试连接</button>
+              <span id="connStatus" class="conn-status"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ Compare Page ════ -->
+    <div id="page-compare" class="page">
+      <div class="page-header">
+        <h2><span class="page-icon">🔄</span> 结构对比</h2>
+        <p class="page-desc">选择数据库进行结构差异比对</p>
+      </div>
+      <div class="page-body">
+        <!-- Connection selectors -->
+        <div class="compare-selectors">
+          <div class="compare-select-group">
+            <label>源库（新结构）</label>
+            <select id="srcSelect" class="select"></select>
+          </div>
+          <div class="compare-swap">
+            <button class="btn btn-icon" onclick="swapConnections()" title="交换源库和目标库">⇄</button>
+          </div>
+          <div class="compare-select-group">
+            <label>目标库（旧结构 → 将同步）</label>
+            <select id="tgtSelect" class="select"></select>
+          </div>
+        </div>
+
+        <!-- Filter & Scope -->
+        <div class="compare-options">
+          <div class="compare-filter">
+            <label>排除表 (逗号分隔 glob)</label>
+            <input type="text" id="excludePatterns" class="input" placeholder="*_bak, *_backup*, tmp_*">
+          </div>
+          <div class="compare-scope">
+            <label>对比范围</label>
+            <div class="checkbox-group" id="scopeGroup">
+              <label class="checkbox-label"><input type="checkbox" value="tables" checked> 表</label>
+              <label class="checkbox-label"><input type="checkbox" value="views"> 视图</label>
+              <label class="checkbox-label"><input type="checkbox" value="functions"> 函数</label>
+              <label class="checkbox-label"><input type="checkbox" value="procedures"> 存储过程</label>
+              <label class="checkbox-label"><input type="checkbox" value="foreign_keys"> 外键</label>
+              <label class="checkbox-label"><input type="checkbox" value="triggers"> 触发器</label>
+              <label class="checkbox-label"><input type="checkbox" value="events"> 事件</label>
+            </div>
+          </div>
+        </div>
+
+        <button class="btn btn-primary btn-lg" onclick="startCompare()">
+          ▶ 开始比对
+        </button>
+      </div>
+    </div>
+
+    <!-- ════ Results Page ════ -->
+    <div id="page-results" class="page">
+      <div class="page-header">
+        <h2><span class="page-icon">📋</span> 差异结果</h2>
+        <p class="page-desc" id="resultSummary">请先执行结构对比</p>
+      </div>
+      <div class="page-body">
+        <!-- Toolbar -->
+        <div class="results-toolbar" id="resultsToolbar" style="display:none;">
+          <button class="btn btn-sm" onclick="selectAll(true)">☑ 全选</button>
+          <button class="btn btn-sm" onclick="selectAll(false)">☐ 取消</button>
+          <span class="toolbar-sep">|</span>
+          <button class="btn btn-sm" onclick="selectByRisk('SAFE')">🟢 仅 SAFE</button>
+          <button class="btn btn-sm" onclick="selectByRisk('WARN')">🟡 仅 WARN</button>
+          <button class="btn btn-sm" onclick="selectByRisk('HIGH')">🔴 仅 HIGH</button>
+          <span class="toolbar-sep">|</span>
+          <span id="selectCount" class="select-count">已选 0/0</span>
+        </div>
+        <!-- Table -->
+        <div class="table-container">
+          <table class="diff-table" id="diffTable">
+            <thead>
+              <tr>
+                <th class="col-check" style="width:40px">✓</th>
+                <th class="col-type" style="width:110px">类型</th>
+                <th class="col-name" style="width:220px">名称</th>
+                <th class="col-risk" style="width:80px">风险</th>
+                <th class="col-detail">详情</th>
+              </tr>
+            </thead>
+            <tbody id="diffBody"></tbody>
+          </table>
+        </div>
+        <div id="emptyResult" class="empty-state">
+          <div class="empty-icon">📭</div>
+          <div>暂无差异数据，请先执行结构对比</div>
+        </div>
+        <!-- Generate button -->
+        <div class="results-footer" id="resultsFooter" style="display:none;">
+          <button class="btn btn-primary btn-lg" onclick="generateSql()">📋 生成迁移 SQL</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ SQL Page ════ -->
+    <div id="page-sql" class="page">
+      <div class="page-header">
+        <h2><span class="page-icon">📄</span> SQL 预览</h2>
+        <p class="page-desc">查看和导出生成的迁移 SQL</p>
+      </div>
+      <div class="page-body">
+        <div class="sql-toolbar">
+          <button class="btn btn-primary" onclick="copySql()">📋 复制到剪贴板</button>
+          <button class="btn" onclick="saveSql()">💾 保存为 .sql</button>
+          <button class="btn" onclick="clearSql()">🗑 清空</button>
+        </div>
+        <textarea id="sqlOutput" class="sql-output" readonly placeholder="点击「生成迁移 SQL」生成 SQL 语句..."></textarea>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Loading overlay -->
+<div id="loadingOverlay" class="loading-overlay" style="display:none;">
+  <div class="loading-box">
+    <div class="spinner-lg"></div>
+    <div id="loadingText" class="loading-text">处理中...</div>
+  </div>
+</div>
+
+<script>{{APP_JS}}</script>
+</body>
+</html>

@@ -87,7 +87,11 @@ if ($connectName) {
 
 if (!$outputFile) {
     $safeName = preg_replace('/[^a-zA-Z0-9_-]/', '_', $conn->database);
-    $outputFile = getcwd() . DIRECTORY_SEPARATOR . "{$safeName}_schema.json";
+    $dumpsDir = $store->getDir() . '/dumps';
+    if (!is_dir($dumpsDir)) {
+        mkdir($dumpsDir, 0755, true);
+    }
+    $outputFile = $dumpsDir . DIRECTORY_SEPARATOR . "{$safeName}_schema.json";
 }
 
 echo "\n═════════════════════════════════════════════════════════════\n";

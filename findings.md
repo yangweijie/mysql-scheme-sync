@@ -93,6 +93,23 @@
 - 在 `setChild()` 之前或之后调用均可（`getContentSize` 回退到构造参数）
 - **最佳实践**：`$dlgWin->centeredOn($this->window)` 在 `show()` 前调用
 
+## UI 阻塞问题根因分析
+
+### 问题本质
+PHP 单线程 + 同步数据库查询 = UI 阻塞。`syncFetchTables()` 内部对 100+ 张表执行 `SHOW CREATE TABLE`，全部在一个 `Loop::delay` 回调里跑完。整个循环期间事件循环被阻塞，WebView2 无法处理 paint/user 事件。
+
+### 解决方案：工作队列架构
+- 维护 `$workQueue` 数组，步骤可**动态入队**
+- `listTables()` 查询表名列表后，为每张表入队一个独立步骤
+- `listAdvanced()` 查询高级对象列表后，为每个对象入队一个独立步骤
+- `dequeueAndRun()` 每次弹出一个步骤执行，然后 `$loop->delay(1)` 调度下一个
+- 每个步骤只执行一条 SQL 查询（~50-100ms），步骤间 yield 1ms
+- 事件循环在每个步骤间隙恢复，处理 WebView2 paint/input 事件
+
+### 与固定步骤列表的区别
+- 旧架构：`buildSteps()` 返回固定数组，`executeStep()` 按 index 遍历 — 单个步骤可能跑几十秒
+- 新架构：`buildWorkQueue()` 填充初始步骤，步骤可动态入队 — 每个查询独立步骤，1ms 间隔
+
 ## UI 阻塞优化方案（子进程）
 
 ### 核心思路
