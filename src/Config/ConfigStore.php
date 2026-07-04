@@ -73,7 +73,7 @@ class ConfigStore
             $pdo = new \PDO($dsn, $conn->user, $conn->password, [
                 \PDO::ATTR_TIMEOUT        => 5,
                 \PDO::ATTR_ERRMODE        => \PDO::ERRMODE_EXCEPTION,
-                \PDO::MYSQL_ATTR_INIT_COMMAND => "SET NAMES utf8mb4",
+                \Pdo\Mysql::ATTR_INIT_COMMAND => "SET NAMES utf8mb4",
             ]);
             $version = $pdo->query('SELECT VERSION()')->fetchColumn();
             return ['ok' => true, 'version' => $version];

@@ -13,24 +13,23 @@ PHP 8.5 路径：`/Users/jay/Library/PhpWebStudy/alias/php85` （macOS Homebrew 
 
 ## 技术栈
 
-- **GUI**: `helgesverre/libui` (dev-main) — PHP FFI 绑定 libui-ng 原生桌面控件
+- **GUI**: `helgesverre/libui` (dev-main) — PHP FFI 绑定 libui-ng 原生桌面控件 + WebViewUI (WebView2/WebKit)
 - **UI 扩展**: `yangweijie/ui2` — MessageBox、DialogConfirm 等对话框
-- **核心比对**: `9raxdev/mysql-struct-sync` (v1.0.3) — 基于 `mysqli` 的 MySQL 结构差异比较库（命名空间 `DDZH\`，类名 `MysqlStructSync`）
 - **异步查询**: `yangweijie/think-orm-async` — 异步 MySQLi 查询包装
-- **PHP 扩展依赖**: `ext-ffi`, `ext-pdo`, `ext-pdo_mysql`, `ext-openssl`
+- **PHP 扩展依赖**: `ext-ffi`, `ext-pdo`, `ext-pdo_mysql`, `ext-openssl`, `ext-mysqli`
 
 ## 项目结构
 
 ```
-bin/mysql-schema-sync.php       # 入口：初始化 FFI + ConfigStore → MainWindow
+bin/mysql-schema-sync.php       # 入口：初始化 FFI + ConfigStore → WebViewUI
 src/
   Config/Connection.php          # 连接数据类（id/name/host/port/user/password/database）
   Config/ConfigStore.php         # 连接管理 + AES-256-GCM 加密持久化到 ~/.mysql-schema-sync/
   Diff/DiffResult.php            # 差异结果纯数据结构（17 种差异类型的 array）
   Diff/StructSyncAdapter.php     # 比对逻辑：fetchStructures → buildDiffSql（含 5 种高级对象）
   Diff/AsyncStructureFetcher.php # 基于 think-orm-async 的并发 SHOW CREATE TABLE
-  Gui/MainWindow.php             # 主窗口：连接选择 + 比对触发 + 迁移 SQL 生成（含内联连接管理 UI）
-  Gui/DiffTableModelDelegate.php # 差异表格的 TableModelDelegate（可勾选行）
+  Gui/WebViewUI.php              # WebView2/WebKit 主窗口 + 桥接 JS ↔ PHP
+  Gui/assets/                    # 前端资源（app.html/css/js/init.js，通过 file_get_contents 加载）
   SqlGen/Generator.php           # 基于 diffSql 生成最终迁移 SQL
 ```
 
@@ -42,7 +41,7 @@ src/
 3. 结果包装为 `DiffResult`（17 种差异类型各自独立 `array`）
 
 ### 重要：库的方向问题
-`5raxdev/mysql-struct-sync` 的构造函数参数顺序是 `(self=目标库, refer=源库)`，但生成 SQL 的 ADD/DROP 方向与用户预期相反。**StructSyncAdapter 内部已 swap source/target 解决此问题**。
+`9raxdev/mysql-struct-sync` 的构造函数参数顺序是 `(self=目标库, refer=源库)`，但生成 SQL 的 ADD/DROP 方向与用户预期相反。**StructSyncAdapter 内部已 swap source/target 解决此问题**。
 
 ### macOS libui Table 坑
 `Libui\Table` 必须在 `Window::show()` 之前创建，否则 macOS NSTableView 的 `cellValue()` 永远不会被调用。`MainWindow::run()` 中在 `show()` 之前调用了 `createResultAreaControls()` 创建空 Table。
@@ -75,7 +74,6 @@ src/
 ### 剪贴板复制
 - macOS：`shell_exec("echo '{$escaped}' | pbcopy")`
 - Windows：`shell_exec('clip < "' . $tmp . '"')`
-- 代码中有两套几乎相同的复制实现，都在 `MainWindow` 里
 
 ## 常见陷阱
 
@@ -83,15 +81,13 @@ src/
 |------|------|------|
 | 比对方向反了 | 库的 ADD/DROP 语义与直觉相反 | StructSyncAdapter 已处理，勿再手动 swap |
 | Table 不显示数据 | macOS 上 Table 在 show() 后创建 | 确保所有 Table 都在 show() 前创建 |
-| UI 卡死 | 同步数据库查询阻塞主线程 | 已知限制，无法完全解决 |
+| UI 卡死 | 同步数据库查询阻塞主线程 | 已通过 work-queue 架构缓解（每张表一个 Loop::delay 步骤） |
 | 连接 ID 冲突 | 之前用 name 做 ID | 已改为 `random_bytes(8)` hex |
-| 库方法缺失 | 1.0.3 原始版无排除过滤 | 修改了 `vendor/9raxdev/mysql-struct-sync/MysqlStructSync.php` 添加方法 |
 | Schema.php 中的代码 | 旧的自实现比对，已废弃 | 已删除 |
-| MainWindow 有大量重复代码 | `buildFilteredDiff` 和 `generateSqlFromDelegate` 做类似的事 | 已用 `buildFilteredDiffFromDelegate` 但仍有重复 |
+| 生成 SQL 双分号 | raw SQL 已含 `;`，Generator 再追加 | 已用 `rtrim($sql, ';')` 修复 8 处 |
 
 ## 依赖库
 
-- `9raxdev/mysql-struct-sync` 的 vendor 代码被修改过（添加了排除过滤、拆分 fetch/compare 方法、进度回调）
 - `helgesverre/libui` 很新（2026-06），API 可能变化
 - `yangweijie/ui2` 提供原生对话框包装（MessageBox::info/error/warning, DialogConfirm::ask）
 
