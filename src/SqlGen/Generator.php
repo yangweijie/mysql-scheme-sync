@@ -1,5 +1,13 @@
 <?php
 // src/SqlGen/Generator.php
+//
+// DDL Generation engine (Phase 4 of Navicat-style algorithm).
+// Features:
+//   - ALTER TABLE merging: multiple column changes per table → single ALTER TABLE (§5.2)
+//   - Dependency-ordered output: DROP (reverse dep) → ALTER → CREATE (dep order) (§5.1)
+//   - Transaction-safe output
+//
+// Reference: .omo/navicat_structure_sync_algorithm_recon.md §5
 
 namespace MySqlSchemaSync\SqlGen;
 
@@ -12,19 +20,25 @@ class Generator
     /** @var array<string, array> Cached diffSql when no live adapter is available */
     private array $cachedDiffSql = [];
 
+    /** @var array<string, array> Structured diffs from DDLDefinitionParser (field-level detail) */
+    private array $structuredDiffs = [];
+
     /**
-     * @param Connection         $source   Source connection (new structure)
-     * @param Connection         $target   Target connection (to be migrated)
-     * @param StructSyncAdapter|null $adapter  Adapter (null when using pre-cached diffSql)
-     * @param array              $diffSql  Pre-cached diffSql array (used when adapter is null)
+     * @param Connection              $source   Source connection (new structure)
+     * @param Connection              $target   Target connection (to be migrated)
+     * @param StructSyncAdapter|null  $adapter  Adapter (null when using pre-cached diffSql)
+     * @param array                   $diffSql  Pre-cached diffSql array (used when adapter is null)
+     * @param array                   $structuredDiffs Field-level diffs from DDLDefinitionParser
      */
     public function __construct(
         private Connection $source,
         private Connection $target,
         private ?StructSyncAdapter $adapter = null,
         array $diffSql = [],
+        array $structuredDiffs = [],
     ) {
         $this->cachedDiffSql = $diffSql;
+        $this->structuredDiffs = $structuredDiffs;
     }
 
     public function generate(DiffResult $diff, bool $useTransaction = true): string
@@ -58,6 +72,149 @@ class Generator
             $lines[] = "";
         }
 
+        // ════════════════════════════════════════════════════════════════
+        //  Dependency-ordered output (§5.1):
+        //
+        //  1. DROP (reverse dependency order):
+        //     TRIGGER → FOREIGN KEY → INDEX/KEY → VIEW → PROC/FUNC → TABLE
+        //
+        //  2. ALTER (table structure merged per table):
+        //     ALTER TABLE ... (MODIFY columns, ADD columns, DROP columns — merged)
+        //
+        //  3. INDEX/FK changes (on existing tables, after structure):
+        //
+        //  4. CREATE (dependency order):
+        //     TABLE → INDEX → FOREIGN KEY → VIEW → PROC/FUNC → TRIGGER → EVENT
+        // ════════════════════════════════════════════════════════════════
+
+        // ─── 1a. DROP TRIGGER (reverse dep: tables depend on triggers ───
+        foreach ($diffSql['DROP_TRIGGER'] ?? [] as $sql) {
+            $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
+            $lines[] = "DROP TRIGGER IF EXISTS `{$name}`;";
+        }
+        if (!empty($diffSql['DROP_TRIGGER'])) $lines[] = "";
+
+        // ─── 1b. DROP FOREIGN KEY (reverse dep: tables depend on FK ────
+        $dropFKTableSkip = array_flip(array_column($diff->removedTables, 'name'));
+        foreach ($diffSql['DROP_CONSTRAINT'] ?? [] as $sql) {
+            if (!preg_match("/^ALTER\s+TABLE\s+`(\w+)`/is", $sql, $m)) continue;
+            $table = $m[1];
+            if (isset($dropFKTableSkip[$table])) continue;
+
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+CONSTRAINT\s+`(\w+)`/is", $sql, $m)) {
+                $lines[] = $sql . ';';
+            }
+        }
+
+        // ─── 1c. DROP INDEX/KEY ──────────────────────────────────────
+        foreach ($diffSql['DROP_CONSTRAINT'] ?? [] as $sql) {
+            if (!preg_match("/^ALTER\s+TABLE\s+`(\w+)`/is", $sql, $m)) continue;
+            $table = $m[1];
+            if (isset($dropFKTableSkip[$table])) continue;
+
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+(?:PRIMARY\s+KEY|KEY\s+`(\w+)`)/is", $sql, $m)) {
+                $table = $m[1];
+                $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
+                if (isset($removedIndexMap[$table][$idxName])) {
+                    $lines[] = $sql . ';';
+                }
+            }
+        }
+        if (!empty($diffSql['DROP_CONSTRAINT'])) $lines[] = "";
+
+        // ─── 1d. DROP VIEW ───────────────────────────────────────────
+        foreach ($diffSql['DROP_VIEW'] ?? [] as $sql) {
+            $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
+            $lines[] = "DROP VIEW IF EXISTS `{$name}`;";
+        }
+        if (!empty($diffSql['DROP_VIEW'])) $lines[] = "";
+
+        // ─── 1e. DROP PROCEDURE/FUNCTION ────────────────────────────
+        foreach (['PROCEDURE', 'FUNCTION'] as $objType) {
+            $dropKey = 'DROP_' . $objType;
+            foreach ($diffSql[$dropKey] ?? [] as $sql) {
+                $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
+                $lines[] = "DROP {$objType} IF EXISTS `{$name}`;";
+            }
+        }
+        if (!empty($diffSql['DROP_PROCEDURE']) || !empty($diffSql['DROP_FUNCTION'])) $lines[] = "";
+
+        // ─── 1f. DROP TABLE ──────────────────────────────────────────
+        foreach ($diffSql['DROP_TABLE'] ?? [] as $sql) {
+            $name = preg_match('/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?/i', $sql, $m) ? $m[1] : null;
+            if ($name && isset($removedTables[$name])) {
+                $lines[] = "-- [HIGH] DROP TABLE `{$name}`";
+                $lines[] = $sql . ";";
+            }
+        }
+        if (!empty($diffSql['DROP_TABLE'])) $lines[] = "";
+
+        // ════════════════════════════════════════════════════════════════
+        //  2. ALTER TABLE — MERGED (§5.2)
+        //     Group all column changes (MODIFY + ADD + DROP) per table
+        //     into a single ALTER TABLE with multiple clauses.
+        // ════════════════════════════════════════════════════════════════
+
+        // Collect per-table column changes from flat SQL arrays
+        $tableAlters = []; // [table => [clauses]]
+
+        foreach ($diffSql['MODIFY_FIELD'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+MODIFY\s+(.*)/is", $sql, $m)) {
+                $table = $m[1];
+                $clause = 'MODIFY ' . $m[2];
+                if (isset($changedMap[$table])) {
+                    $tableAlters[$table][] = $clause;
+                }
+            }
+        }
+
+        foreach ($diffSql['ADD_FIELD'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+(.*)/is", $sql, $m)) {
+                $table = $m[1];
+                $clause = 'ADD ' . $m[2];
+                if (isset($changedMap[$table])) {
+                    $tableAlters[$table][] = $clause;
+                }
+            }
+        }
+
+        foreach ($diffSql['DROP_FIELD'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+`(\w+)`/is", $sql, $m)) {
+                $table = $m[1];
+                $clause = "DROP `{$m[2]}`";
+                if (isset($changedMap[$table])) {
+                    $tableAlters[$table][] = $clause;
+                }
+            }
+        }
+
+        foreach ($diffSql['ADD_CONSTRAINT'] ?? [] as $sql) {
+            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`/is", $sql, $m)) {
+                $table = $m[1];
+                // Skip for newly created tables (already in CREATE TABLE)
+                if (isset($selectedTables[$table])) continue;
+
+                // Extract the operation after ALTER TABLE
+                $op = substr($sql, strlen($m[0]));
+                $clause = 'ADD ' . trim($op);
+                $tableAlters[$table][] = $clause;
+            }
+        }
+
+        // Write merged ALTER TABLE per table
+        foreach ($tableAlters as $table => $clauses) {
+            if (empty($clauses)) continue;
+
+            $risk = $changedMap[$table]['risk'] ?? 'WARN';
+            $lines[] = "-- === 变更表: {$table} === [{$risk}]";
+            $lines[] = "ALTER TABLE `{$table}`";
+            $lines[] = "  " . implode(",\n  ", $clauses) . ";";
+            $lines[] = "";
+        }
+
+        // ─── 3. DROP TABLE entries already handled above ──────────────
+
+        // ─── 4. CREATE TABLE (dependency: tables first, no FK deps) ────
         foreach ($diffSql['ADD_TABLE'] ?? [] as $sql) {
             $name = preg_match('/CREATE\s+TABLE\s+`?(\w+)`?/i', $sql, $m) ? $m[1] : null;
             if ($name && isset($selectedTables[$name])) {
@@ -67,93 +224,50 @@ class Generator
             }
         }
 
-        foreach ($diffSql['MODIFY_FIELD'] ?? [] as $table => $fields) {
-            if (!isset($changedMap[$table])) continue;
-            $t = $changedMap[$table];
-            $lines[] = "-- === 变更表: {$table} === [{$t['risk']}]";
-            foreach ($fields as $col => $def) {
-                $lines[] = "ALTER TABLE `{$table}` MODIFY {$def};";
-            }
-            $lines[] = "";
+        // ─── 5. CREATE VIEW (depends on tables) ───────────────────────
+        foreach ($diffSql['ADD_VIEW'] ?? [] as $sql) {
+            $lines[] = $sql . ";";
         }
+        if (!empty($diffSql['ADD_VIEW'])) $lines[] = "";
 
-        foreach ($diffSql['ADD_FIELD'] ?? [] as $table => $fields) {
-            if (!isset($changedMap[$table])) continue;
-            $lines[] = "-- === 新增列: {$table} ===";
-            foreach ($fields as $col => $def) {
-                $lines[] = "ALTER TABLE `{$table}` ADD {$def};";
-            }
-            $lines[] = "";
-        }
-
-        foreach ($diffSql['DROP_FIELD'] ?? [] as $table => $fields) {
-            if (!isset($changedMap[$table])) continue;
-            $lines[] = "-- === 删除列: {$table} ===";
-            foreach ($fields as $col => $def) {
-                $lines[] = "ALTER TABLE `{$table}` DROP COLUMN `{$col}`;";
-            }
-            $lines[] = "";
-        }
-
-        // ADD_CONSTRAINT: diffSql contains flat ALTER TABLE SQL strings
-        foreach ($diffSql['ADD_CONSTRAINT'] ?? [] as $sql) {
-            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+(?:PRIMARY\s+KEY|KEY\s+`(\w+)`)/is", $sql, $m)) {
-                $table = $m[1];
-                $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
-                if (isset($newIndexMap[$table][$idxName])) {
-                    $lines[] = $sql . ';';
-                }
-            } elseif (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+ADD\s+CONSTRAINT\s+`(\w+)`\s+FOREIGN\s+KEY/is", $sql, $m)) {
-                $lines[] = $sql . ';';
-            }
-        }
-
-        // DROP_CONSTRAINT: flat ALTER TABLE SQL strings
-        foreach ($diffSql['DROP_CONSTRAINT'] ?? [] as $sql) {
-            if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+(?:PRIMARY\s+KEY|KEY\s+`(\w+)`)/is", $sql, $m)) {
-                $table = $m[1];
-                $idxName = (isset($m[2]) && $m[2] !== '') ? $m[2] : 'PRIMARY';
-                if (isset($removedIndexMap[$table][$idxName])) {
-                    $lines[] = $sql . ';';
-                }
-            } elseif (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+DROP\s+CONSTRAINT\s+`(\w+)`/is", $sql, $m)) {
-                $lines[] = $sql . ';';
-            }
-        }
-
-        foreach ($diffSql['DROP_TABLE'] ?? [] as $sql) {
-            $name = preg_match('/DROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?`?(\w+)`?/i', $sql, $m) ? $m[1] : null;
-            if ($name && isset($removedTables[$name])) {
-                $lines[] = "-- [HIGH] DROP TABLE `{$name}`";
+        // ─── 6. CREATE PROCEDURE/FUNCTION/TRIGGER/EVENT ────────────────
+        foreach (['ADD_PROCEDURE', 'ADD_FUNCTION'] as $addType) {
+            foreach ($diffSql[$addType] ?? [] as $sql) {
                 $lines[] = $sql . ";";
             }
         }
+        if (!empty($diffSql['ADD_PROCEDURE']) || !empty($diffSql['ADD_FUNCTION'])) $lines[] = "";
 
-        foreach (['ADD_VIEW','MODIFY_VIEW','DROP_VIEW','ADD_PROCEDURE','MODIFY_PROCEDURE','DROP_PROCEDURE','ADD_FUNCTION','MODIFY_FUNCTION','DROP_FUNCTION','ADD_TRIGGER','MODIFY_TRIGGER','DROP_TRIGGER','ADD_EVENT','MODIFY_EVENT','DROP_EVENT'] as $type) {
-            if (!empty($diffSql[$type])) {
-                foreach ($diffSql[$type] as $sql) {
-                    if (str_starts_with($type, 'DROP_')) {
-                        // DROP_VIEW/PROCEDURE/FUNCTION/TRIGGER/EVENT → generate DROP statement
-                        $objType = substr($type, 5); // VIEW, PROCEDURE, FUNCTION, TRIGGER, EVENT
-                        $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
-                        $sql = "DROP {$objType} IF EXISTS `{$name}`";
-                    } elseif ($type === 'MODIFY_VIEW') {
-                        // MySQL: CREATE OR REPLACE VIEW for existing views
-                        $sql = preg_replace('/^CREATE\s/', 'CREATE OR REPLACE ', $sql);
-                    } elseif (in_array($type, ['MODIFY_TRIGGER','MODIFY_FUNCTION','MODIFY_PROCEDURE'])) {
-                        // MySQL has no CREATE OR REPLACE for these; DROP + CREATE
-                        $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
-                        $objType = str_replace('MODIFY_', '', $type); // TRIGGER, FUNCTION, PROCEDURE
-                        $sql = "DROP {$objType} IF EXISTS `{$name}`;\n{$sql}";
-                    } elseif ($type === 'MODIFY_EVENT') {
-                        $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
-                        $sql = "DROP EVENT IF EXISTS `{$name}`;\n{$sql}";
-                    }
+        // ─── 7. MODIFY advanced objects (DROP + CREATE for replace) ────
+        foreach (['MODIFY_VIEW', 'MODIFY_TRIGGER', 'MODIFY_FUNCTION', 'MODIFY_PROCEDURE', 'MODIFY_EVENT'] as $type) {
+            if (empty($diffSql[$type])) continue;
+
+            $objType = str_replace('MODIFY_', '', $type);
+            foreach ($diffSql[$type] as $sql) {
+                // Views can use CREATE OR REPLACE; other objects need DROP + CREATE
+                $name = preg_match('/`(\w+)`/', $sql, $m) ? $m[1] : '';
+
+                if ($type === 'MODIFY_VIEW') {
+                    $lines[] = preg_replace('/^CREATE\s/', 'CREATE OR REPLACE ', $sql) . ";";
+                } else {
+                    $lines[] = "DROP {$objType} IF EXISTS `{$name}`;";
                     $lines[] = $sql . ";";
                 }
-                $lines[] = "";
             }
+            $lines[] = "";
         }
+
+        // ─── 8. ADD TRIGGER ──────────────────────────────────────────
+        foreach ($diffSql['ADD_TRIGGER'] ?? [] as $sql) {
+            $lines[] = $sql . ";";
+        }
+        if (!empty($diffSql['ADD_TRIGGER'])) $lines[] = "";
+
+        // ─── 9. ADD EVENT ────────────────────────────────────────────
+        foreach ($diffSql['ADD_EVENT'] ?? [] as $sql) {
+            $lines[] = $sql . ";";
+        }
+        if (!empty($diffSql['ADD_EVENT'])) $lines[] = "";
 
         if ($useTransaction) {
             $lines[] = "COMMIT;";

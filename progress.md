@@ -8,27 +8,27 @@
 - 创建了 AGENTS.md（针对新 OpenCode 会话的紧凑指令文件）
 - **死代码清理完成：删除 2 个废弃文件 + 3 个死方法 + 1 个未使用常量 + 1 个未使用依赖**
 - **think-orm-async 优化完成：AsyncContext 替换手工 MYSQLI_ASYNC + 高级对象 SHOW CREATE 并行化**
+- **Navicat 算法重实现完成：DDLDefinitionParser 语义解析 + StructSyncAdapter 字段级 diff + Generator ALTER TABLE 合并 + 依赖排序**
 
 ## 已修改文件
 | 文件 | 改动 |
 |------|------|
 | `src/Config/ConfigStore.php` | Windows HOME 兼容 + settings 存储 |
-| `src/Diff/StructSyncAdapter.php` | 包装库方法 + fetchAll/compare 分离 |
+| `src/Diff/StructSyncAdapter.php` | 包装库方法 + fetchAll/compare 分离；DDLDefinitionParser 字段级 diff + 两阶段比较 + `$structuredDiffs` + `getStructuredDiffs()` |
 | `src/Diff/DiffResult.php` | 精简为纯数据结构；删除 `PHASE_FETCH_TARGET` 常量 |
-| `src/Gui/MainWindow.php` | on_phase + on_progress 回调驱动进度条；删除 `buildFilteredDiffFromDelegate()` 死方法 |
+| `src/Gui/MainWindow.php` | on_phase + on_progress 回调驱动进度条；删除 `buildFilteredDiffFromDelegate()` 死方法；传入 `getStructuredDiffs()` |
 | `src/Gui/ConnectionWindow.php` | editingId 追踪 + random_bytes ID（文件已删除——废弃窗口） |
 | `src/Gui/DiffTableModelDelegate.php` | 隐藏新建/删除表的子项 |
-| `src/SqlGen/Generator.php` | 用库 diffSql 输出生成 SQL |
-| `src/Diff/AsyncStructureFetcher.php` | 删除 `fetchStructuresInParallel()` 死方法 |
+| `src/SqlGen/Generator.php` | 用库 diffSql 输出生成 SQL；ALTER TABLE 合并 + 依赖排序输出 |
+| `src/Diff/AsyncStructureFetcher.php` | 删除 `fetchStructuresInParallel()` 死方法；AsyncContext 替代 MYSQLI_ASYNC |
 | `src/Diff/Schema.php` | **整文件删除**——244 行废弃手工比对类 |
 | `vendor/9raxdev/mysql-struct-sync/MysqlStructSync.php` | 拆分方法 + 排除过滤 + 进度回调 |
 | `composer.json` | 移除+恢复 `yangweijie/think-orm-async`；恢复 `nunomaduro/collision`；添加 `classmap` autoload |
 | `AGENTS.md` | 新建——OpenCode 新会话的快速入门指令 |
-| `src/Diff/AsyncStructureFetcher.php` | 用 `AsyncContext` 替代手工 `MYSQLI_ASYNC`（清理 36 行） |
-| `src/Diff/StructSyncAdapter.php` | 高级对象 SHOW CREATE 用 `AsyncContext` 并行化；删除废弃 `createMysqli()` |
 | `vendor/yangweijie/think-orm-async/src/AsyncContext.php` | 修补 `?string` 可空类型（PHP 8.5 兼容） |
 | `vendor/yangweijie/think-orm-async/src/AsyncResultPlaceholder.php` | 修补 `:mixed` 协变返回类型（PHP 8.5 兼容） |
 | `vendor/yangweijie/think-orm-async/src/think/Collection.php` | **新建**——`think\Collection` 轻量存根 |
+| **`src/Diff/DDLDefinitionParser.php`** | **新建**——MySQL 列定义语义解析器（10 字段提取、字段级对比、完整 DDL 解析） |
 
 ## 删除统计
 | 清理项 | 行数 |
@@ -56,3 +56,5 @@
 2. 取消按钮在库同步调用期间无法生效
 3. `MainWindow` 中两套剪贴板复制代码仍有重复
 4. 两套过滤/SQL 生成路径逻辑重叠
+5. 无自动化测试（需 mock 数据库连接）
+6. DDLDefinitionParser 的 `splitDefinitionLines()` 对极端嵌套 CASE 表达式可能误分割

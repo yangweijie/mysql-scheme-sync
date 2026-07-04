@@ -64,6 +64,19 @@
 - [x] `think\Collection` 轻量存根（移除 think-orm-async 对 ThinkPHP 的依赖）
 - [x] `composer.json` — 添加 `classmap` autoload 加载 `think\Collection` 存根
 
+### Phase 9: Navicat 算法重实现 ✅
+- [x] 创建 `DDLDefinitionParser.php` — MySQL 列定义语义解析（type/nullable/default/extra/charset/collation/on_update/generated）
+- [x] `parseColumnDef()` — 从 DDL 片段提取 10 个结构化字段
+- [x] `compareColumnDefs()` — 字段级语义对比（处理 MySQL 格式变体）
+- [x] `parseFullDDL()` — 解析完整 SHOW CREATE TABLE 为 columns/indexes/foreign_keys/table_options
+- [x] `compareDDL()` — 两阶段比较：Quick（表名集）→ Full（DDL 语义 diff）
+- [x] StructSyncAdapter 改用 DDLDefinitionParser 做字段级 diff（替代原始 `!==` 比较）
+- [x] 结构化的 `$structuredDiffs` 属性 + `getStructuredDiffs()` 公开访问
+- [x] `field_diffs` 数组 + `detail` 中文描述挂到 MODIFY_COLUMN 变更项
+- [x] Generator ALTER TABLE 合并（同一表的 MODIFY/ADD/DROP 合并为一条 ALTER）
+- [x] Generator 依赖排序输出：DROP（逆序）→ ALTER（合并）→ CREATE（正序）
+- [x] MainWindow 两处 Generator 构造传入 `getStructuredDiffs()`
+
 ## 技术决策
 | 决策 | 原因 |
 |------|------|
@@ -75,6 +88,8 @@
 | 用 `AsyncContext` 替代手工 `MYSQLI_ASYNC` | 代码更简洁，复用库的重试/超时逻辑 |
 | 高级对象 SHOW CREATE 用 AsyncContext 并行化 | 消除串行 N+1 查询，减小延迟 |
 | `think\Collection` 轻量存根 | think-orm-async 运行时需要，但无 ThinkPHP 依赖 |
+| DDLDefinitionParser 语义解析替代 `!==` | Navicat 算法要求字段级语义 diff（charset/collation/ON UPDATE 等） |
+| ALTER TABLE 合并 | Navicat §5.2：同一表的多个变更合并为一条 ALTER，减少网络往返 |
 
 ## 错误记录
 | 错误 | 原因 | 修复 |

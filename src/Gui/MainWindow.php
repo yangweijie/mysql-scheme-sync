@@ -634,7 +634,8 @@ class MainWindow
 
         $src = $this->getSelectedConnection($this->srcCombo);
         $tgt = $this->getSelectedConnection($this->tgtCombo);
-        $gen = new Generator($src, $tgt, $this->adapter, $this->lastDiffSql ?? []);
+        $structuredDiffs = $this->adapter ? $this->adapter->getStructuredDiffs() : [];
+        $gen = new Generator($src, $tgt, $this->adapter, $this->lastDiffSql ?? [], $structuredDiffs);
         $sql = $gen->generate($filtered);
 
         $win = new Window('生成的迁移 SQL', 800, 500);
@@ -933,7 +934,8 @@ class MainWindow
                 }
             }
 
-            $gen = new \MySqlSchemaSync\SqlGen\Generator($src, $tgt, $this->adapter, $this->lastDiffSql ?? []);
+            $structuredDiffs = $this->adapter ? $this->adapter->getStructuredDiffs() : [];
+            $gen = new \MySqlSchemaSync\SqlGen\Generator($src, $tgt, $this->adapter, $this->lastDiffSql ?? [], $structuredDiffs);
             $sql = $gen->generate($filtered);
         } catch (\Throwable $e) {
             \Yangweijie\Ui2\Dialogs\MessageBox::error($win, '错误', '生成 SQL 失败：' . $e->getMessage());
@@ -970,7 +972,7 @@ class MainWindow
                 shell_exec("echo '{$escaped}' | pbcopy");
                 $ok = true;
             }
-            \yangweijie\ui2\MessageBox::info($sqlWin, '已复制', $ok ? 'SQL 已复制到剪贴板。' : '复制失败，请手动复制。');
+            MessageBox::info($sqlWin, '已复制', $ok ? 'SQL 已复制到剪贴板。' : '复制失败，请手动复制。');
         });
         $btnRow->append($copyBtn, false);
         $sqlBox->append($btnRow, false);

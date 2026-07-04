@@ -4,6 +4,20 @@ namespace MySqlSchemaSync\Diff;
 use MySqlSchemaSync\Config\Connection;
 use Yangweijie\ThinkOrmAsync\AsyncContext;
 
+/**
+ * StructSyncAdapter — MySQL structure comparison engine (Phase 2&3 of Navicat-style algorithm).
+ *
+ * Algorithm (ref: .omo/navicat_structure_sync_algorithm_recon.md):
+ *   Phase 1: Schema Collection   — Fetch SHOW CREATE TABLE for source & target
+ *   Phase 2: Graph Construction   — Implicit DAG through structure traversal order
+ *   Phase 3: Diff Calculation     — DDLDefinitionParser semantic column comparison
+ *   Phase 4: DDL Generation       — Convert to flat SQL array → Generator merges ALTERs
+ *
+ * Key improvements over older MysqlStructSync approach:
+ *   - DDLDefinitionParser field-level column comparison (charset, collation, ON UPDATE, etc.)
+ *   - Semantic equality: catches formatting differences MySQL introduces
+ *   - Structured diff storage for precise change descriptions
+ */
 class StructSyncAdapter
 {
     private Connection $source;
@@ -25,6 +39,14 @@ class StructSyncAdapter
     private array $newTableNames = [];
     /** @var string[] Table names that will be dropped (constraint diffs for these skipped) */
     private array $droppedTableNames = [];
+
+    /**
+     * Structured per-table diffs from DDLDefinitionParser field-level comparison.
+     * Used by Generator for enriched ALTER TABLE with field-level change descriptions.
+     *
+     * @var array<string, array> [tableName => ['modify' => [colName => [['field'=>,'old'=>,'new'=>]]], ...]]
+     */
+    private array $structuredDiffs = [];
 
     public function cancel(): void { $this->cancelled = true; }
     public function isCancelled(): bool { return $this->cancelled; }
@@ -62,6 +84,15 @@ class StructSyncAdapter
     }
 
     /**
+     * Get structured field-level diffs for enhanced change descriptions.
+     * @return array<string, array>
+     */
+    public function getStructuredDiffs(): array
+    {
+        return $this->structuredDiffs;
+    }
+
+    /**
      * 异步获取两张库的结构并比对
      */
     public function fetchAll(array $excludePatterns = []): void
@@ -96,8 +127,12 @@ class StructSyncAdapter
     }
 
     /**
-     * 核心比对逻辑：对比两张库的结构，生成差异 SQL
-     * 逻辑复刻自 DDZH\MysqlStructSync::baseDiff() 和 advanceDiff()
+     * 核心比对逻辑 — Navicat-style two-phase diff with DDLDefinitionParser.
+     *
+     * Phase 1 (Quick Snapshot): table name sets → ADD, DROP, CANDIDATE
+     * Phase 2 (Full DDL Compare): semantic column/constraint diff via DDLDefinitionParser
+     *
+     * Direction: source (new) → target (old), produce SQL to make old = new.
      */
     private function buildDiffSql(): array
     {
@@ -114,6 +149,7 @@ class StructSyncAdapter
 
         // 1-4. 表/列/约束差异（仅当 tables scope 开启时）
         if ($tablesEnabled) {
+            // ─── Phase 1: Quick Snapshot — table name sets ───
             // 1. 新增表（新结构有、旧结构没有 → 添加）
             $res['ADD_TABLE'] = array_diff($tgt['tables'] ?? [], $src['tables'] ?? []);
             // 2. 删除表（旧结构有、新结构没有 → 删除）
@@ -126,19 +162,33 @@ class StructSyncAdapter
             $srcCols = $src['columns'] ?? [];
             $tgtCols = $tgt['columns'] ?? [];
 
-            // 3. 查找公共表，对比列差异
+            // ─── Phase 2: Full DDL Compare — column/constraint diff ───
+            // 3. 查找公共表（CANDIDATE 表），对比列差异（CSDiffMatchPatch-style）
             $commonTables = array_intersect($src['tables'] ?? [], $tgt['tables'] ?? []);
+            $this->structuredDiffs = [];
 
             foreach ($commonTables as $table) {
                 $srcTableCols = $srcCols[$table] ?? [];
                 $tgtTableCols = $tgtCols[$table] ?? [];
+                $tableDiffs = [];
 
                 // 目标有、源没有 → ADD
                 foreach ($tgtTableCols as $field => $def) {
                     if (!isset($srcTableCols[$field])) {
                         $res['ADD_FIELD'][$table][$field] = $def;
-                    } elseif ($srcTableCols[$field] !== $def) {
-                        $res['MODIFY_FIELD'][$table][$field] = $def;
+                        $tableDiffs['add'][] = $field;
+                    } else {
+                        // Use DDLDefinitionParser for semantic field-level diff
+                        // (analogous to Navicat's CSDiffMatchPatch on DDL text,
+                        // but operating on parsed column definitions for precision)
+                        $oldParsed = DDLDefinitionParser::parseColumnDef($field, $srcTableCols[$field]);
+                        $newParsed = DDLDefinitionParser::parseColumnDef($field, $def);
+
+                        if (!DDLDefinitionParser::columnDefEquals($oldParsed, $newParsed)) {
+                            $res['MODIFY_FIELD'][$table][$field] = $def;
+                            $fieldDiffs = DDLDefinitionParser::compareColumnDefs($oldParsed, $newParsed);
+                            $tableDiffs['modify'][$field] = $fieldDiffs;
+                        }
                     }
                 }
 
@@ -146,11 +196,16 @@ class StructSyncAdapter
                 foreach ($srcTableCols as $field => $def) {
                     if (!isset($tgtTableCols[$field])) {
                         $res['DROP_FIELD'][$table][$field] = $def;
+                        $tableDiffs['drop'][] = $field;
                     }
+                }
+
+                if (!empty($tableDiffs)) {
+                    $this->structuredDiffs[$table] = $tableDiffs;
                 }
             }
 
-            // 4. 约束差异
+            // 4. 约束差异（index + foreign key comparison）
             // 排除新增/删除表的约束，它们已包含在 CREATE/DROP TABLE 中
             $addTableKeys = array_flip($res['ADD_TABLE'] ?? []);
             $dropTableKeys = array_flip($res['DROP_TABLE'] ?? []);
@@ -163,12 +218,39 @@ class StructSyncAdapter
                 $tgtConstraints = $this->stripForeignKeys($tgtConstraints);
             }
 
-            $res['DROP_CONSTRAINT'] = self::arrayDiffAssocRecursive(
-                $srcConstraints, $tgt['constraints'] ?? []
-            );
-            $res['ADD_CONSTRAINT'] = self::arrayDiffAssocRecursive(
-                $tgtConstraints, $src['constraints'] ?? []
-            );
+            // 按约束名逐条比较（而非按数组位置），避免位置偏移导致整表约束都出现在两侧
+            // 比较时忽略 USING BTREE/HASH（InnoDB 默认值，不影响语义）
+            foreach ($commonTables as $table) {
+                $srcLines = $srcConstraints[$table] ?? [];
+                $tgtLines = $tgtConstraints[$table] ?? [];
+                if (!$srcLines && !$tgtLines) continue;
+
+                $srcByName = [];
+                $tgtByName = [];
+                foreach ($srcLines as $line) {
+                    $srcByName[self::constraintName($line)] = $line;
+                }
+                foreach ($tgtLines as $line) {
+                    $tgtByName[self::constraintName($line)] = $line;
+                }
+
+                // DROP: src有tgt没有，或定义不同的
+                foreach ($srcByName as $name => $line) {
+                    if (!isset($tgtByName[$name])) {
+                        $res['DROP_CONSTRAINT'][$table][] = $line;
+                    } elseif (self::normalizeConstraint($tgtByName[$name]) !== self::normalizeConstraint($line)) {
+                        $res['DROP_CONSTRAINT'][$table][] = $line;
+                    }
+                }
+                // ADD: tgt有src没有，或定义不同的
+                foreach ($tgtByName as $name => $line) {
+                    if (!isset($srcByName[$name])) {
+                        $res['ADD_CONSTRAINT'][$table][] = $line;
+                    } elseif (self::normalizeConstraint($srcByName[$name]) !== self::normalizeConstraint($line)) {
+                        $res['ADD_CONSTRAINT'][$table][] = $line;
+                    }
+                }
+            }
         }
 
         // 5. 生成差异 SQL
@@ -419,9 +501,17 @@ class StructSyncAdapter
         foreach ($this->diffSql['MODIFY_FIELD'] ?? [] as $sql) {
             if (preg_match("/^ALTER\s+TABLE\s+`(\w+)`\s+MODIFY\s+`(\w+)`\s+(.*)/is", $sql, $m)) {
                 $table = $m[1]; $col = $m[2]; $def = $m[3];
+                $change = ['kind' => 'MODIFY_COLUMN', 'risk' => DiffResult::RISK_WARN, 'column' => $col, 'detail' => $def];
+
+                // Attach field-level diffs from DDLDefinitionParser for enriched UI display
+                if (isset($this->structuredDiffs[$table]['modify'][$col])) {
+                    $change['field_diffs'] = $this->structuredDiffs[$table]['modify'][$col];
+                    $change['detail'] = self::formatFieldDiffs($this->structuredDiffs[$table]['modify'][$col]);
+                }
+
                 $d->changedTables[$table]['name'] = $table;
                 $d->changedTables[$table]['risk'] = DiffResult::RISK_WARN;
-                $d->changedTables[$table]['changes'][] = ['kind' => 'MODIFY_COLUMN', 'risk' => DiffResult::RISK_WARN, 'column' => $col, 'detail' => $def];
+                $d->changedTables[$table]['changes'][] = $change;
             }
         }
         // ADD_FIELD: ALTER TABLE `t` ADD `col` definition
@@ -484,5 +574,69 @@ class StructSyncAdapter
         return $d;
     }
 
+    /**
+     * Format field-level diffs from DDLDefinitionParser into a human-readable string.
+     */
+    private static function formatFieldDiffs(array $diffs): string
+    {
+        $parts = [];
+        foreach ($diffs as $diff) {
+            $field = $diff['field'];
+            $old = $diff['old'];
+            $new = $diff['new'];
+
+            // Format boolean/null values
+            if ($field === 'nullable') {
+                $oldStr = $old ? 'NULL' : 'NOT NULL';
+                $newStr = $new ? 'NULL' : 'NOT NULL';
+            } else {
+                $oldStr = $old === null ? '(none)' : (string)$old;
+                $newStr = $new === null ? '(none)' : (string)$new;
+            }
+
+            $fieldLabel = [
+                'type' => '数据类型', 'nullable' => '可为空', 'default' => '默认值',
+                'extra' => '额外属性', 'comment' => '注释', 'charset' => '字符集',
+                'collation' => '排序规则', 'on_update' => 'ON UPDATE', 'generated' => '生成列',
+            ][$field] ?? $field;
+
+            $parts[] = "{$fieldLabel}: {$oldStr} → {$newStr}";
+        }
+        return implode('; ', $parts);
+    }
+
     public function getDiffSql(): array { return $this->diffSql; }
+
+    /**
+     * Extract a constraint name from a SHOW CREATE TABLE constraint line.
+     * Returns 'PRIMARY' for PRIMARY KEY, or the backtick-quoted name for KEY/CONSTRAINT/etc.
+     */
+    private static function constraintName(string $line): string
+    {
+        // PRIMARY KEY
+        if (preg_match('/^\s*PRIMARY\s+KEY/i', $line)) {
+            return 'PRIMARY';
+        }
+        // KEY `name`, INDEX `name`, UNIQUE `name`, UNIQUE KEY `name`, FULLTEXT `name`, SPATIAL `name`
+        if (preg_match('/^\s*(?:KEY|INDEX|UNIQUE(?:\s+KEY)?|FULLTEXT|SPATIAL)\s+`([^`]+)`/i', $line, $m)) {
+            return $m[1];
+        }
+        // CONSTRAINT `name`
+        if (preg_match('/^\s*CONSTRAINT\s+`([^`]+)`/i', $line, $m)) {
+            return $m[1];
+        }
+        // Fallback: use the entire line as-is (should not normally happen)
+        return trim(rtrim($line, ','));
+    }
+
+    /**
+     * Normalize a constraint line for comparison purposes.
+     * Strips USING BTREE/USING HASH since these are storage engine hints
+     * that don't change the logical index definition.
+     * MySQL may or may not include them in SHOW CREATE TABLE output.
+     */
+    private static function normalizeConstraint(string $line): string
+    {
+        return preg_replace('/\s+USING\s+(?:BTREE|HASH)\b/i', '', $line);
+    }
 }

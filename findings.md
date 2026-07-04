@@ -60,6 +60,30 @@
 - `yangweijie/think-orm-async` — 零 `use` 引用，已移除，连带清理 10 个传递依赖包
 - `nunomaduro/collision` — 代码中无 `use` 引用，但 `yangweijie/ui2/bootstrap.php` 在 runtime 通过 `class_exists()` 触发 autoload 需要它 → 已恢复
 
+## DDLDefinitionParser（Navicat 算法核心）
+- `parseColumnDef(string $def)` — 用单条正则从 MySQL 列 DDL 提取 10 个字段：
+  - `type`（如 VARCHAR(255)），`nullable`（NOT NULL / NULL），`default`，`extra`（AUTO_INCREMENT 等）
+  - `charset`，`collation`，`on_update`（CURRENT_TIMESTAMP 等），`generated`（AS (...)，STORED/VIRTUAL）
+  - `comment`（列注释）
+- `compareColumnDefs()` — 字段级语义对比，返回 `{"field":"type","from":"int","to":"varchar(255)"}` 格式的 diff 数组
+- `columnDefEquals()` — 语义相等比较（处理 MySQL 格式变体如 `int(11)` vs `int`，`CHARACTER SET` vs `CHARSET`）
+- `parseFullDDL(string $ddl)` — 解析完整 SHOW CREATE TABLE：
+  - `columns`：按先后顺序的列定义数组
+  - `indexes`：索引结构（PRIMARY/UNIQUE/INDEX，含列名+前缀+ASC/DESC）
+  - `foreign_keys`：外键结构（含引用表+引用列+ON UPDATE/DELETE）
+  - `table_options`：表选项（ENGINE, CHARSET, COLLATE, COMMENT 等）
+- `compareDDL()` — 两阶段比较：
+  - Phase 1（Quick）：仅对比列名/索引名/外键名集合，标记 ADD/DROP
+  - Phase 2（Full）：对共同存在的列做 `compareColumnDefs()` 语义 diff
+- `splitDefinitionLines()` — 处理 DDL 中的嵌套括号（函数调用、CHECK 约束等），避免 `preg_match` 因不匹配括号炸掉
+- `parseIndexColumns()` — 提取索引定义中的列名、前缀长度、ASC/DESC 排序
+
+### 实现要点
+- 正则基于 Navicat 二进制逆向文档中 CMFetchScope 枚举和 CSDiffMatchPatch 语义化 diff 原理
+- 字段级比较而非字符级 diff（PHP 无 Google diff-match-patch 原生绑定）
+- `parseFullDDL` 用 `preg_match_all` + 嵌套栈计数器处理 `(...)` 嵌套
+- `compareColumnDefs` 对 charset/collation 做归一化比较（`charset` 与 `character set` 视为等价）
+
 ## UI 阻塞优化方案（子进程）
 
 ### 核心思路
