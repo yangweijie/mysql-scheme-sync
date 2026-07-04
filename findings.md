@@ -84,6 +84,15 @@
 - `parseFullDDL` 用 `preg_match_all` + 嵌套栈计数器处理 `(...)` 嵌套
 - `compareColumnDefs` 对 charset/collation 做归一化比较（`charset` 与 `character set` 视为等价）
 
+## libui Window 居中 API
+- `Window::centered()` — 在屏幕居中
+- `Window::centeredOn(self $parent)` — 相对指定父窗口居中
+  - 内部使用 `parent->getContentSize()` + `parent->getPosition()` + `$this->getContentSize()` 计算偏移
+  - `getContentSize()` 在窗口 show() 前回退到构造时 `$width`/`$height` 值
+  - 父窗口位置为 (0,0) 或子窗口更大时回退到屏幕居中
+- 在 `setChild()` 之前或之后调用均可（`getContentSize` 回退到构造参数）
+- **最佳实践**：`$dlgWin->centeredOn($this->window)` 在 `show()` 前调用
+
 ## UI 阻塞优化方案（子进程）
 
 ### 核心思路

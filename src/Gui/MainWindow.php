@@ -21,6 +21,7 @@ use MySqlSchemaSync\Diff\StructSyncAdapter;
 use MySqlSchemaSync\Diff\DiffResult;
 use MySqlSchemaSync\SqlGen\Generator;
 use Yangweijie\Ui2\Dialogs\MessageBox;
+use Yangweijie\Ui2\Dialogs\DialogConfirm;
 use Libui\Form;
 use MySqlSchemaSync\Diff\AsyncCompareRunner;
 
@@ -745,22 +746,25 @@ class MainWindow
 
     private function onManageConnections(): void
     {
-        $dlg = new ConnectionWindow($this->store, function () {
-            $this->refreshConnectionLists();
-        });
-        // Center on parent window (manual positioning)
-        [$px, $py] = $this->window->getPosition();
-        [$pw, $ph] = $this->window->getContentSize();
-        [$w, $h]   = $this->window->getContentSize();
-        $dlgWin = new Window('连接管理', 500, 420);
+        $dlgWin = new Window('连接管理', 500, 480);
         $dlgWin->setMargined(true);
         $dlgWin->onClosing(function () { return true; });
-        $dlgWin->setPosition(max(0, (int)($px + ($pw - $w) / 2)), max(0, (int)($py + ($ph - $h) / 2)));
-        
-        // Rebuild the connection window content manually
+        $dlgWin->centeredOn($this->window);
+
         $root = new Box(true); // vertical box
         $root->setPadded(true);
 
+        // ── Connection selector row ──────────────────────────────
+        $selRow = Box::horizontal();
+        $selRow->setPadded(true);
+        $selRow->append(new Label('选择连接:'), false);
+        $connCombo = new Combobox();
+        $selRow->append($connCombo, true);
+        $deleteBtn = new Button('🗑 删除');
+        $selRow->append($deleteBtn, false);
+        $root->append($selRow, false);
+
+        // ── Form ─────────────────────────────────────────────────
         $form = new Form();
         $form->setPadded(true);
         $form->append('连接名称', new Entry());
@@ -773,13 +777,71 @@ class MainWindow
         $form->append('默认数据库', new Entry());
         $root->append($form, false);
 
+        // ── Status ───────────────────────────────────────────────
         $status = new Label('');
         $root->append($status, false);
 
+        // ── Action buttons ───────────────────────────────────────
         $btnRow = Box::horizontal();
         $btnRow->setPadded(true);
-        
         $testBtn = new Button('🔌 测试连接');
+        $saveBtn = new Button('💾 保存');
+        $btnRow->append($testBtn, false);
+        $btnRow->append($saveBtn, false);
+        $root->append($btnRow, false);
+
+        // ── State ────────────────────────────────────────────────
+        $editId = null; // connection ID being edited, null = new
+
+        // ── Helpers ──────────────────────────────────────────────
+        $rebuildCombo = function () use ($connCombo) {
+            $connCombo->clear();
+            $connCombo->append('— 新建连接 —');
+            $connCombo->setSelected(0);
+            foreach ($this->store->list() as $c) {
+                $connCombo->append("{$c->name} ({$c->host}:{$c->port}/{$c->database})");
+            }
+        };
+
+        $clearForm = function () use ($form, &$editId) {
+            $form->setValues([
+                '连接名称' => '',
+                '主机' => '',
+                '端口' => '3306',
+                '用户名' => '',
+                '密码' => '',
+                '默认数据库' => '',
+            ]);
+            $editId = null;
+        };
+
+        $rebuildCombo();
+
+        // ── Selection changed ────────────────────────────────────
+        $connCombo->onSelected(function () use ($connCombo, $form, &$editId, $clearForm) {
+            $idx = $connCombo->selected();
+            if ($idx <= 0) {
+                $clearForm();
+                return;
+            }
+            $list = $this->store->list();
+            $conn = $list[$idx - 1] ?? null;
+            if ($conn === null) {
+                $clearForm();
+                return;
+            }
+            $form->setValues([
+                '连接名称' => $conn->name,
+                '主机' => $conn->host,
+                '端口' => (string)$conn->port,
+                '用户名' => $conn->user,
+                '密码' => $conn->password,
+                '默认数据库' => $conn->database,
+            ]);
+            $editId = $conn->id;
+        });
+
+        // ── Test connection ──────────────────────────────────────
         $testBtn->onClicked(function () use ($form, $status) {
             $v = $form->values();
             $conn = new Connection(
@@ -798,16 +860,17 @@ class MainWindow
                 $status->setText("❌ 连接失败：{$result['error']}");
             }
         });
-        
-        $saveBtn = new Button('💾 保存');
-        $saveBtn->onClicked(function () use ($form, $status) {
+
+        // ── Save (create or update) ──────────────────────────────
+        $saveBtn->onClicked(function () use ($form, $status, &$editId, $rebuildCombo, $clearForm, $connCombo) {
             $v = $form->values();
             if (trim($v['连接名称'] ?? '') === '' || trim($v['主机'] ?? '') === '' || trim($v['默认数据库'] ?? '') === '') {
                 $status->setText('❌ 名称、主机、默认数据库不能为空');
                 return;
             }
+            $id = $editId ?? bin2hex(random_bytes(8));
             $conn = new Connection(
-                id: bin2hex(random_bytes(8)),
+                id: $id,
                 name: trim($v['连接名称']),
                 host: trim($v['主机']),
                 port: (int)trim($v['端口'] ?: '3306'),
@@ -817,13 +880,34 @@ class MainWindow
             );
             $this->store->add($conn);
             $status->setText("✅ 已保存：{$conn->name}");
+            $editId = $conn->id;
+            $rebuildCombo();
+            // reselect the saved/updated connection
+            $list = $this->store->list();
+            foreach ($list as $i => $c) {
+                if ($c->id === $conn->id) {
+                    $connCombo->setSelected($i + 1);
+                    break;
+                }
+            }
             $this->refreshConnectionLists();
         });
-        
-        $btnRow->append($testBtn, false);
-        $btnRow->append($saveBtn, false);
-        $root->append($btnRow, false);
-        
+
+        // ── Delete ───────────────────────────────────────────────
+        $deleteBtn->onClicked(function () use ($dlgWin, &$editId, $rebuildCombo, $clearForm, $status) {
+            if ($editId === null) {
+                $status->setText('ℹ️ 请先选择一个连接');
+                return;
+            }
+            $confirmed = DialogConfirm::ask($dlgWin, '确认删除', '确定要删除此连接吗？');
+            if (!$confirmed) return;
+            $this->store->remove($editId);
+            $status->setText("✅ 已删除");
+            $clearForm();
+            $rebuildCombo();
+            $this->refreshConnectionLists();
+        });
+
         $dlgWin->setChild($root);
         $dlgWin->show();
     }

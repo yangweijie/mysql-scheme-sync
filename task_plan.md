@@ -77,6 +77,15 @@
 - [x] Generator 依赖排序输出：DROP（逆序）→ ALTER（合并）→ CREATE（正序）
 - [x] MainWindow 两处 Generator 构造传入 `getStructuredDiffs()`
 
+### Phase 10: 连接管理增强 ✅
+- [x] 连接选择器 Combobox — 在弹窗顶部列出所有已有连接
+- [x] 选择连接时自动填充表单（名称/主机/端口/用户/密码/数据库）
+- [x] 保存区分新建 vs 更新：新建生成随机 ID，更新复用原有 ID
+- [x] 删除按钮 + DialogConfirm 确认
+- [x] 保存/删除后自动刷新连接列表并保持选中
+- [x] 保存/删除后同步主窗口下拉框（refreshConnectionLists）
+- [x] 弹窗相对父窗口居中（`Window::centeredOn()` 代替手动 buggy 计算）
+
 ## 技术决策
 | 决策 | 原因 |
 |------|------|
