@@ -46,6 +46,20 @@
     alert('错误: ' + msg);
   }
 
+  function showToast(msg, duration) {
+    duration = duration || 1000;
+    var el = document.getElementById('toast');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'toast';
+      document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    el.className = 'toast visible';
+    clearTimeout(el._timer);
+    el._timer = setTimeout(function() { el.className = 'toast'; }, duration);
+  }
+
   function getVal(id) { return document.getElementById(id).value; }
   function setVal(id, v) { document.getElementById(id).value = v; }
 
@@ -594,7 +608,7 @@
     bridgeCall('copyToClipboard', text).then(function(result) {
       hideLoading();
       if (result && result.ok) {
-        alert('✅ SQL 已复制到剪贴板');
+        showToast('✅ SQL 已复制到剪贴板');
       } else {
         alert('⚠ 复制失败，请手动复制');
       }
@@ -604,30 +618,63 @@
     });
   };
 
+  window.showSaveNotification = function(path, filename) {
+    var el = document.getElementById('saveNotification');
+    var textEl = document.getElementById('saveNotifText');
+    if (!el || !textEl) return;
+    textEl.innerHTML = '✅ 已保存到 <a href="#" id="saveNotifLink">' + filename + '</a>';
+    document.getElementById('saveNotifLink').onclick = function(e) {
+      e.preventDefault();
+      bridgeCall('openDirectory', path);
+    };
+    el.style.display = '';
+  };
+
+  window.closeSaveNotification = function() {
+    var el = document.getElementById('saveNotification');
+    if (el) el.style.display = 'none';
+  };
+
   window.saveSql = function() {
     var text = document.getElementById('sqlOutput').value;
     if (!text) { alert('没有 SQL 内容可保存'); return; }
 
-    // Use JS Blob + download link (works in WebView2)
-    try {
-      var blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
-      var url = URL.createObjectURL(blob);
-      var a = document.createElement('a');
-      a.href = url;
-      a.download = 'migration_' + new Date().toISOString().slice(0,10) + '.sql';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch(e) {
-      alert('保存失败: ' + e.message);
-    }
+    showLoading('保存中...');
+    bridgeCall('saveSqlFile', text).then(function(result) {
+      hideLoading();
+      closeSaveNotification(); // dismiss any previous
+      if (result && result.ok) {
+        showSaveNotification(result.path, result.filename);
+      } else {
+        alert('保存失败: ' + (result && result.error ? result.error : '未知错误'));
+      }
+    }).catch(function(err) {
+      hideLoading();
+      alert('保存失败: ' + err);
+    });
   };
 
   window.clearSql = function() {
-    if (document.getElementById('sqlOutput').value && !confirm('确定清空 SQL 内容？')) return;
-    document.getElementById('sqlOutput').value = '';
-    state.generatedSql = '';
+    var ta = document.getElementById('sqlOutput');
+    if (!ta.value) return;
+    var overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML = '<div class="confirm-box">' +
+      '<h3>确认清空</h3>' +
+      '<p>确定清空 SQL 内容？<br>此操作不可撤销。</p>' +
+      '<div class="confirm-actions">' +
+        '<button class="btn" onclick="this.closest(\'.confirm-overlay\').remove()">取消</button>' +
+        '<button class="btn btn-danger" id="confirmClearSqlBtn">清空</button>' +
+      '</div></div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.remove();
+    });
+    document.getElementById('confirmClearSqlBtn').addEventListener('click', function() {
+      overlay.remove();
+      ta.value = '';
+      state.generatedSql = '';
+    });
   };
 
   // ════════════════════════════════════════════════════

@@ -97,6 +97,7 @@ class WebViewUI
             0,
             max(400, $cw),
             max(300, $ch),
+            true,
         );
         $this->webview->autoResize($this->window, 0, 0);
 
@@ -901,6 +902,65 @@ class WebViewUI
             }
         });
 
+        // ─── Save SQL File ──────────────────────────────────────────
+
+        $wv->bind("saveSqlFile", function (string $id, string $req) use (
+            $wv,
+        ): void {
+            try {
+                $params = json_decode($req, true);
+                $content = is_array($params) ? $params[0] ?? "" : "";
+
+                $home = $_SERVER['HOME'] ?? $_SERVER['USERPROFILE'] ?? getenv('HOME') ?: getenv('USERPROFILE');
+                $dir = $home . '/.mysql-schema-sync/dumps';
+                if (!is_dir($dir)) {
+                    @mkdir($dir, 0700, true);
+                }
+
+                $filename = "migration_" . date("Y-m-d") . ".sql";
+                $path = $dir . "/" . $filename;
+                file_put_contents($path, $content);
+
+                $wv->return($id, 0, json_encode([
+                    "ok" => true,
+                    "path" => $path,
+                    "filename" => $filename,
+                ]));
+            } catch (\Throwable $e) {
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode(["ok" => false, "error" => $e->getMessage()]),
+                );
+            }
+        });
+
+        // ─── Open Directory ───────────────────────────────────────
+
+        $wv->bind("openDirectory", function (string $id, string $req) use (
+            $wv,
+        ): void {
+            try {
+                $params = json_decode($req, true);
+                $path = is_array($params) ? $params[0] ?? "" : "";
+                $dir = $path !== "" ? dirname($path) : "";
+                if ($dir !== "" && is_dir($dir)) {
+                    if (DIRECTORY_SEPARATOR === "\\") {
+                        shell_exec("explorer " . \escapeshellarg($dir));
+                    } else {
+                        shell_exec("open " . \escapeshellarg($dir));
+                    }
+                }
+                $wv->return($id, 0, json_encode(["ok" => true]));
+            } catch (\Throwable $e) {
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode(["ok" => false, "error" => $e->getMessage()]),
+                );
+            }
+        });
+
         // ─── Stdout Capture ───────────────────────────────────────
 
         $wv->bind("getStdout", function (string $id, string $req) use (
@@ -916,6 +976,11 @@ class WebViewUI
                     json_encode(["lines" => [], "error" => $e->getMessage()]),
                 );
             }
+        });
+
+        $wv->bind("quitApp", function (string $id, string $req) use ($wv): void {
+            $wv->return($id, 0, json_encode(["ok" => true]));
+            \Libui\Ffi::quit();
         });
     }
 
@@ -1000,13 +1065,15 @@ class WebViewUI
     {
         $assetDir = __DIR__ . "/assets";
 
-        $html = file_get_contents($assetDir . "/app.html");
-        $css = file_get_contents($assetDir . "/app.css");
+        $html  = file_get_contents($assetDir . "/app.html");
+        $pico  = file_get_contents($assetDir . "/pico.min.css");
+        $css   = file_get_contents($assetDir . "/app.css");
         $initJs = file_get_contents($assetDir . "/init.js");
         $appJs = file_get_contents($assetDir . "/app.js");
 
         if (
             $html === false ||
+            $pico === false ||
             $css === false ||
             $initJs === false ||
             $appJs === false
@@ -1017,8 +1084,8 @@ class WebViewUI
         }
 
         return str_replace(
-            ["{{CSS}}", "{{INIT_JS}}", "{{APP_JS}}"],
-            [$css, $initJs, $appJs],
+            ["{{PICO_CSS}}", "{{CSS}}", "{{INIT_JS}}", "{{APP_JS}}"],
+            [$pico, $css, $initJs, $appJs],
             $html,
         );
     }

@@ -11,4 +11,15 @@
       console.error('Bridge postMessage error:', e);
     }
   };
+
+  document.addEventListener('keydown', function(e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'q') {
+      e.preventDefault();
+      try {
+        window.__webview__.call('quitApp', '{}');
+      } catch(err) {
+        console.error('quitApp bridge call error:', err);
+      }
+    }
+  });
 })();

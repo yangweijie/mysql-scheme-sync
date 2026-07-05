@@ -4,10 +4,17 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MySQL SchemaSync</title>
+<style>{{PICO_CSS}}</style>
 <style>{{CSS}}</style>
 <script>{{INIT_JS}}</script>
 </head>
 <body>
+<!-- ── Save Notification Bar (top, persistent) ── -->
+<div id="saveNotification" class="save-notification" style="display:none">
+  <span id="saveNotifText">✅ 已保存到 <a href="#" id="saveNotifLink">loading.sql</a></span>
+  <button class="save-notif-close" onclick="closeSaveNotification()" aria-label="关闭">✕</button>
+</div>
+
 <div id="app-loader"><div class="spinner"></div><div class="loader-text">加载中...</div></div>
 
 <div id="app" style="display:none;">
@@ -130,14 +137,18 @@
             <label>源库（新结构）</label>
             <select id="srcSelect" class="select"></select>
           </div>
-          <div class="compare-swap">
+          <div class="compare-select-group compare-swap">
+            <label class="sr-only">交换</label>
             <button class="btn btn-icon" onclick="swapConnections()" title="交换源库和目标库">⇄</button>
           </div>
           <div class="compare-select-group">
             <label>目标库（旧结构 → 将同步）</label>
             <select id="tgtSelect" class="select"></select>
           </div>
-          <button class="btn btn-sm btn-secondary save-quick-compare-btn" onclick="showSaveQuickCompareDialog()" title="保存为快速对比">另存为快速对比</button>
+          <div class="compare-select-group save-quick-compare-group">
+            <label class="sr-only">另存为快速对比</label>
+            <button class="btn btn-secondary save-quick-compare-btn" onclick="showSaveQuickCompareDialog()" title="保存为快速对比">另存为快速对比</button>
+          </div>
         </div>
 
         <!-- Filter & Scope -->
