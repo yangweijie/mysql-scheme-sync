@@ -1,5 +1,6 @@
 #!/usr/bin/env php85
 <?php
+ini_set('date.timezone', 'Asia/Shanghai');
 require __DIR__ . '/../vendor/autoload.php';
 
 use Libui\Ffi;
