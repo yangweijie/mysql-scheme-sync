@@ -44,7 +44,7 @@
       </a>
     </nav>
     <div class="sidebar-footer">
-      <div class="sidebar-version">v1.0</div>
+      <div class="sidebar-version" onclick="showAboutDialog()">v1.0</div>
     </div>
   </aside>
 
@@ -138,7 +138,6 @@
             <select id="srcSelect" class="select"></select>
           </div>
           <div class="compare-select-group compare-swap">
-            <label class="sr-only">交换</label>
             <button class="btn btn-icon" onclick="swapConnections()" title="交换源库和目标库">⇄</button>
           </div>
           <div class="compare-select-group">
@@ -146,7 +145,6 @@
             <select id="tgtSelect" class="select"></select>
           </div>
           <div class="compare-select-group save-quick-compare-group">
-            <label class="sr-only">另存为快速对比</label>
             <button class="btn btn-secondary save-quick-compare-btn" onclick="showSaveQuickCompareDialog()" title="保存为快速对比">另存为快速对比</button>
           </div>
         </div>

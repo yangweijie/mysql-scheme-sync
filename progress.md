@@ -18,6 +18,15 @@
 - **Windows 任务栏图标修复完成：PHP FFI 调用 user32.dll（跨进程 HICON 无效，需同进程加载）**
 - **AGENTS.md 更新完成：移除废弃的 9raxdev/mysql-struct-sync 引用、MainWindow 引用；补充新文件文档**
 
+## 最新改动（Phase 18 - UI 对齐/关于弹窗）
+| 改动 | 文件 |
+|------|------|
+| 比较选择器 4 元素统一 box-model 对齐（select/swap/save 统一 font-size/line-height/padding/height） | `src/Gui/assets/app.css` |
+| `&nbsp;` 占位改为 `<label class="sr-only">` 真实文字占位 + `visibility:hidden` 保证高度一致 | `src/Gui/assets/app.html`, `app.css` |
+| 侧栏版本号点击弹出关于弹窗（showAboutDialog + overlay 复用） | `src/Gui/assets/app.html`, `app.css`, `app.js` |
+| `.sidebar-version { cursor:pointer; }` + `.about-link` 样式 | `src/Gui/assets/app.css` |
+| `window.showAboutDialog()` — 复用 confirm-overlay/confirm-box 模式 | `src/Gui/assets/app.js` |
+
 ## 最新改动（Phase 15 - 工作队列架构）
 | 改动 | 文件 |
 |------|------|

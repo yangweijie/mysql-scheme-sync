@@ -129,6 +129,11 @@
 - [x] 补充 DllBootstrap、AsyncCompareRunner、DDLDefinitionParser 文档
 - [x] 补充 bridge/ 和 stubs/think/ 目录到项目结构
 
+### Phase 18: UI 对齐 & 关于弹窗 ✅
+- [x] 比较选择器 4 元素统一 box-model（select/swap button/save button 统一 font-size/line-height/padding/height calc）
+- [x] `&nbsp;` 占位替换为 `<label class="sr-only">` + `visibility:hidden` 保证标签占位高度一致
+- [x] 侧栏版本号点击弹出关于弹窗（复用 confirm-overlay + confirm-box 模式）
+
 ## 技术决策
 | 决策 | 原因 |
 |------|------|

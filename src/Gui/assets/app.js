@@ -749,6 +749,38 @@
   }
 
   // ════════════════════════════════════════════════════
+  //  About Dialog
+  // ════════════════════════════════════════════════════
+
+  window.showAboutDialog = function() {
+    var overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+    overlay.innerHTML =
+      '<div class="confirm-box" style="max-width:380px;text-align:center;">' +
+        '<div style="font-size:2.5rem;margin-bottom:0.25rem;">⚡</div>' +
+        '<h3 style="font-size:1rem;margin:0 0 0.25rem;">MySQL SchemaSync</h3>' +
+        '<p style="font-size:0.8125rem;color:var(--pico-muted-color);margin:0 0 1rem;line-height:1.5;">' +
+          'MySQL 数据库结构对比与迁移 SQL 生成工具' +
+        '</p>' +
+        '<div style="font-size:0.8125rem;margin-bottom:1rem;line-height:2;">' +
+          '<div>版本：<strong>v1.0</strong></div>' +
+          '<div>' +
+            '<a href="https://github.com/yangweijie/mysql-scheme-sync" ' +
+               'class="about-link" target="_blank">' +
+              'github.com/yangweijie/mysql-scheme-sync' +
+            '</a>' +
+          '</div>' +
+          '<div>作者：yangweijie</div>' +
+        '</div>' +
+        '<button class="btn" onclick="this.closest(\'.confirm-overlay\').remove()">关闭</button>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', function(e) {
+      if (e.target === overlay) overlay.remove();
+    });
+  };
+
+  // ════════════════════════════════════════════════════
   //  Initialization
   // ════════════════════════════════════════════════════
 
