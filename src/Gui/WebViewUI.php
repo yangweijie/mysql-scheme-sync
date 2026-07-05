@@ -25,48 +25,62 @@ class WebViewUI
     private ?StructSyncAdapter $adapter = null;
     private ?DiffResult $lastDiff = null;
     private ?array $lastDiffSql = null;
-    private string $lastSrcId = '';
-    private string $lastTgtId = '';
+    private string $lastSrcId = "";
+    private string $lastTgtId = "";
 
     // Step-by-step compare state
     private ?AsyncCompareRunner $currentRunner = null;
-    private string $comparePhase = 'idle';
-    private string $compareError = '';
+    private string $comparePhase = "idle";
+    private string $compareError = "";
 
     // Stdout capture
     private static array $stdoutBuffer = [];
     private static int $stdoutOffset = 0;
 
     // Cached settings
-    private string $excludePatterns = '';
+    private string $excludePatterns = "";
     private array $compareScope = [];
 
     public function __construct(ConfigStore $store)
     {
         $this->store = $store;
-        $this->excludePatterns = $store->getSetting('excludePatterns', '*_bak, *_backup*, tmp_*');
-        $savedScope = $store->getSetting('compareScope', null);
-        $this->compareScope = $savedScope ?? ['tables','views','functions','procedures','foreign_keys','triggers','events'];
+        $this->excludePatterns = $store->getSetting(
+            "excludePatterns",
+            "*_bak, *_backup*, tmp_*",
+        );
+        $savedScope = $store->getSetting("compareScope", null);
+        $this->compareScope = $savedScope ?? [
+            "tables",
+            "views",
+            "functions",
+            "procedures",
+            "foreign_keys",
+            "triggers",
+            "events",
+        ];
     }
 
     public function run(): void
     {
         self::debugLog("MySQL SchemaSync starting...");
-        self::debugLog("PHP " . PHP_VERSION . " | " . PHP_OS . " | " . php_sapi_name());
+        self::debugLog(
+            "PHP " . PHP_VERSION . " | " . PHP_OS . " | " . php_sapi_name(),
+        );
         self::debugLog("Debug output: ENABLED");
 
-        $this->window = new Window('MySQL SchemaSync — WebView', 1100, 750);
+        $this->window = new Window("MySQL SchemaSync — WebView", 1100, 750);
         $this->window->setMargined(false)->setResizeable(true)->centered();
 
-        $assetsDir = \dirname(__DIR__, 2) . '/src/Gui/assets';
-        $iconPath = (PHP_OS_FAMILY === 'Windows')
-            ? $assetsDir . '/icon.ico'
-            : $assetsDir . '/icon.png';
+        $assetsDir = \dirname(__DIR__, 2) . "/src/Gui/assets";
+        $iconPath =
+            PHP_OS_FAMILY === "Windows"
+                ? $assetsDir . "/icon.ico"
+                : $assetsDir . "/icon.png";
 
         // Set icon before window is shown.
         if (\file_exists($iconPath)) {
             $this->window->setWindowIcon($iconPath);
-            if (PHP_OS_FAMILY === 'Windows') {
+            if (PHP_OS_FAMILY === "Windows") {
                 $this->setWindowIcons($iconPath);
             }
         }
@@ -77,7 +91,13 @@ class WebViewUI
 
         // WebView fills entire content area
         [$cw, $ch] = $this->window->getContentSize();
-        $this->webview = new WebView($this->window, 0, 0, max(400, $cw), max(300, $ch));
+        $this->webview = new WebView(
+            $this->window,
+            0,
+            0,
+            max(400, $cw),
+            max(300, $ch),
+        );
         $this->webview->autoResize($this->window, 0, 0);
 
         $this->registerBridgeHandlers();
@@ -88,7 +108,7 @@ class WebViewUI
         // Windows: re-apply icons after WebView2 settles.
         // setTaskbarIcon() handles both ICON_SMALL + ICON_BIG
         // via ExtractIconExW (proper multi-resolution ICO extraction).
-        if (PHP_OS_FAMILY === 'Windows' && \file_exists($iconPath)) {
+        if (PHP_OS_FAMILY === "Windows" && \file_exists($iconPath)) {
             Loop::delay(500, function () use ($iconPath) {
                 self::debugLog("setWinIcons (apply, delay 500ms)");
                 try {
@@ -114,17 +134,26 @@ class WebViewUI
         if (!self::$debugEnabled) {
             return;
         }
-        $ts = date('H:i:s.') . str_pad((int)(microtime(true) * 1000) % 1000, 3, '0', STR_PAD_LEFT);
+        $ts =
+            date("H:i:s.") .
+            str_pad(
+                (int) (microtime(true) * 1000) % 1000,
+                3,
+                "0",
+                STR_PAD_LEFT,
+            );
         $line = "[{$ts}] [DEBUG] {$msg}";
         fwrite(STDOUT, $line . "\n");
         self::$stdoutBuffer[] = $line;
     }
 
-    private static function debugLogException(\Throwable $e, string $context = ''): void
-    {
-        $prefix = $context ? "[{$context}] " : '';
+    private static function debugLogException(
+        \Throwable $e,
+        string $context = "",
+    ): void {
+        $prefix = $context ? "[{$context}] " : "";
         self::debugLog("{$prefix}EXCEPTION: " . $e->getMessage());
-        self::debugLog("  File: " . $e->getFile() . ':' . $e->getLine());
+        self::debugLog("  File: " . $e->getFile() . ":" . $e->getLine());
         foreach (explode("\n", $e->getTraceAsString()) as $line) {
             self::debugLog("  {$line}");
         }
@@ -154,33 +183,38 @@ class WebViewUI
         static $s32 = null;
         if ($u32 === null) {
             $u32 = \FFI::cdef(
-                'void* SendMessageW(void* hWnd, unsigned int Msg, void* wParam, void* lParam);'
-                . 'void* SetClassLongPtrW(void* hWnd, int nIndex, void* dwNewLong);'
-                . 'int DestroyIcon(void* hIcon);',
-                'user32.dll',
+                "void* SendMessageW(void* hWnd, unsigned int Msg, void* wParam, void* lParam);" .
+                    "void* SetClassLongPtrW(void* hWnd, int nIndex, void* dwNewLong);" .
+                    "int DestroyIcon(void* hIcon);",
+                "user32.dll",
             );
             $s32 = \FFI::cdef(
-                'unsigned int ExtractIconExW(void* lpszFile, int nIconIndex, void** phiconLarge, void** phiconSmall, unsigned int nIcons);',
-                'shell32.dll',
+                "unsigned int ExtractIconExW(void* lpszFile, int nIconIndex, void** phiconLarge, void** phiconSmall, unsigned int nIcons);",
+                "shell32.dll",
             );
         }
 
         try {
             $libui = \Libui\Ffi::get();
-            $hwnd = \FFI::cast('void*', $libui->uiControlHandle($this->window->asControl()));
+            $hwnd = \FFI::cast(
+                "void*",
+                $libui->uiControlHandle($this->window->asControl()),
+            );
         } catch (\Throwable $e) {
-            self::debugLog("setWindowIcons: uiControlHandle failed: " . $e->getMessage());
+            self::debugLog(
+                "setWindowIcons: uiControlHandle failed: " . $e->getMessage(),
+            );
             return;
         }
 
         // Convert path to wchar_t*
-        $wide = \mb_convert_encoding($iconPath . "\0", 'UTF-16LE');
-        $pathPtr = \FFI::new("uint16_t[" . ((int)(\strlen($wide) / 2)) . "]");
+        $wide = \mb_convert_encoding($iconPath . "\0", "UTF-16LE");
+        $pathPtr = \FFI::new("uint16_t[" . ((int) (\strlen($wide) / 2)) . "]");
         \FFI::memcpy($pathPtr, $wide, \strlen($wide));
 
         // ExtractIconExW extracts large+small icons with proper resolution matching.
-        $phLarge = \FFI::new('void*[1]');
-        $phSmall = \FFI::new('void*[1]');
+        $phLarge = \FFI::new("void*[1]");
+        $phSmall = \FFI::new("void*[1]");
         $n = $s32->ExtractIconExW($pathPtr, 0, $phLarge, $phSmall, 1);
         if ($n === 0) {
             self::debugLog("setWindowIcons: ExtractIconExW returned 0");
@@ -205,7 +239,12 @@ class WebViewUI
             $u32->SendMessageW($hwnd, 0x0080, null, $phSmall[0]);
         }
         if (!\FFI::isNull($phLarge[0])) {
-            $u32->SendMessageW($hwnd, 0x0080, \FFI::cast('void*', 1), $phLarge[0]);
+            $u32->SendMessageW(
+                $hwnd,
+                0x0080,
+                \FFI::cast("void*", 1),
+                $phLarge[0],
+            );
             self::debugLog("setWindowIcons: WM_SETICON done");
         }
     }
@@ -232,187 +271,248 @@ class WebViewUI
 
         // ─── Connection Management ─────────────────────────────────
 
-        $wv->bind('getConnections', function (string $id, string $req) use ($wv): void {
+        $wv->bind("getConnections", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $list = [];
                 foreach ($this->store->list() as $c) {
                     $list[] = [
-                        'id'       => $c->id,
-                        'name'     => $c->name,
-                        'host'     => $c->host,
-                        'port'     => $c->port,
-                        'user'     => $c->user,
-                        'password' => $c->password,
-                        'database' => $c->database,
+                        "id" => $c->id,
+                        "name" => $c->name,
+                        "host" => $c->host,
+                        "port" => $c->port,
+                        "user" => $c->user,
+                        "password" => $c->password,
+                        "database" => $c->database,
                     ];
                 }
                 $wv->return($id, 0, json_encode($list));
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
-        $wv->bind('saveConnection', function (string $id, string $req) use ($wv): void {
+        $wv->bind("saveConnection", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $data = is_array($params) ? ($params[0] ?? $params) : [];
-                $connId = $data['id'] ?? bin2hex(random_bytes(8));
+                $data = is_array($params) ? $params[0] ?? $params : [];
+                $connId = $data["id"] ?? bin2hex(random_bytes(8));
                 $conn = new Connection(
                     id: $connId,
-                    name: trim($data['name'] ?? ''),
-                    host: trim($data['host'] ?? ''),
-                    port: (int)($data['port'] ?? 3306),
-                    user: trim($data['user'] ?? ''),
-                    password: $data['password'] ?? '',
-                    database: trim($data['database'] ?? ''),
+                    name: trim($data["name"] ?? ""),
+                    host: trim($data["host"] ?? ""),
+                    port: (int) ($data["port"] ?? 3306),
+                    user: trim($data["user"] ?? ""),
+                    password: $data["password"] ?? "",
+                    database: trim($data["database"] ?? ""),
                 );
                 $this->store->add($conn);
-                $wv->return($id, 0, json_encode(['id' => $connId]));
+                $wv->return($id, 0, json_encode(["id" => $connId]));
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
-        $wv->bind('deleteConnection', function (string $id, string $req) use ($wv): void {
+        $wv->bind("deleteConnection", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $connId = is_array($params) ? ($params[0] ?? '') : '';
+                $connId = is_array($params) ? $params[0] ?? "" : "";
                 $this->store->remove($connId);
-                $wv->return($id, 0, json_encode(['ok' => true]));
+                $wv->return($id, 0, json_encode(["ok" => true]));
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
-        $wv->bind('testConnection', function (string $id, string $req) use ($wv): void {
+        $wv->bind("testConnection", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $data = is_array($params) ? ($params[0] ?? $params) : [];
+                $data = is_array($params) ? $params[0] ?? $params : [];
                 $conn = new Connection(
-                    id: '',
-                    name: '',
-                    host: trim($data['host'] ?? ''),
-                    port: (int)($data['port'] ?? 3306),
-                    user: trim($data['user'] ?? ''),
-                    password: $data['password'] ?? '',
-                    database: trim($data['database'] ?? ''),
+                    id: "",
+                    name: "",
+                    host: trim($data["host"] ?? ""),
+                    port: (int) ($data["port"] ?? 3306),
+                    user: trim($data["user"] ?? ""),
+                    password: $data["password"] ?? "",
+                    database: trim($data["database"] ?? ""),
                 );
                 $result = $this->store->test($conn);
                 $wv->return($id, 0, json_encode($result));
             } catch (\Throwable $e) {
-                $wv->return($id, 0, json_encode(['ok' => false, 'error' => $e->getMessage()]));
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode(["ok" => false, "error" => $e->getMessage()]),
+                );
             }
         });
 
         // ─── Quick Compare Configs ────────────────────────────────
 
-        $wv->bind('getQuickCompares', function (string $id, string $req) use ($wv): void {
+        $wv->bind("getQuickCompares", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
-                $wv->return($id, 0, json_encode($this->store->listQuickCompares()));
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode($this->store->listQuickCompares()),
+                );
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
-        $wv->bind('saveQuickCompare', function (string $id, string $req) use ($wv): void {
+        $wv->bind("saveQuickCompare", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $data = is_array($params) ? ($params[0] ?? $params) : [];
-                $name = trim($data['name'] ?? '');
-                $srcId = $data['srcId'] ?? '';
-                $tgtId = $data['tgtId'] ?? '';
+                $data = is_array($params) ? $params[0] ?? $params : [];
+                $name = trim($data["name"] ?? "");
+                $srcId = $data["srcId"] ?? "";
+                $tgtId = $data["tgtId"] ?? "";
                 if (!$name || !$srcId || !$tgtId) {
-                    $wv->return($id, 1, json_encode(['error' => '请填写名称并选择源库和目标库']));
+                    $wv->return(
+                        $id,
+                        1,
+                        json_encode([
+                            "error" => "请填写名称并选择源库和目标库",
+                        ]),
+                    );
                     return;
                 }
                 $newId = $this->store->saveQuickCompare($name, $srcId, $tgtId);
-                $wv->return($id, 0, json_encode(['ok' => true, 'id' => $newId]));
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode(["ok" => true, "id" => $newId]),
+                );
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
-        $wv->bind('deleteQuickCompare', function (string $id, string $req) use ($wv): void {
+        $wv->bind("deleteQuickCompare", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $qcId = is_array($params) ? ($params[0] ?? '') : '';
+                $qcId = is_array($params) ? $params[0] ?? "" : "";
                 $ok = $this->store->deleteQuickCompare($qcId);
-                $wv->return($id, 0, json_encode(['ok' => $ok]));
+                $wv->return($id, 0, json_encode(["ok" => $ok]));
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
         // ─── Settings ──────────────────────────────────────────────
 
-        $wv->bind('getSettings', function (string $id, string $req) use ($wv): void {
+        $wv->bind("getSettings", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
-                $wv->return($id, 0, json_encode([
-                    'excludePatterns' => $this->excludePatterns,
-                    'compareScope'    => $this->compareScope,
-                ]));
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode([
+                        "excludePatterns" => $this->excludePatterns,
+                        "compareScope" => $this->compareScope,
+                    ]),
+                );
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
-        $wv->bind('saveSettings', function (string $id, string $req) use ($wv): void {
+        $wv->bind("saveSettings", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $data = is_array($params) ? ($params[0] ?? $params) : [];
-                $patterns = $data['excludePatterns'] ?? $this->excludePatterns;
-                $scope = $data['compareScope'] ?? $this->compareScope;
+                $data = is_array($params) ? $params[0] ?? $params : [];
+                $patterns = $data["excludePatterns"] ?? $this->excludePatterns;
+                $scope = $data["compareScope"] ?? $this->compareScope;
 
                 $this->excludePatterns = $patterns;
                 $this->compareScope = $scope;
 
-                $this->store->setSetting('excludePatterns', $patterns);
-                $this->store->setSetting('compareScope', $scope);
-                $wv->return($id, 0, json_encode(['ok' => true]));
+                $this->store->setSetting("excludePatterns", $patterns);
+                $this->store->setSetting("compareScope", $scope);
+                $wv->return($id, 0, json_encode(["ok" => true]));
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
         // ─── Compare (step-by-step, non-blocking) ──────────────────
 
-        $wv->bind('compare', function (string $id, string $req) use ($wv): void {
+        $wv->bind("compare", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $data = is_array($params) ? ($params[0] ?? $params) : [];
+                $data = is_array($params) ? $params[0] ?? $params : [];
 
-                $srcId = $data['srcId'] ?? '';
-                $tgtId = $data['tgtId'] ?? '';
-                $patterns = $data['excludePatterns'] ?? $this->excludePatterns;
-                $scope = $data['compareScope'] ?? $this->compareScope;
+                $srcId = $data["srcId"] ?? "";
+                $tgtId = $data["tgtId"] ?? "";
+                $patterns = $data["excludePatterns"] ?? $this->excludePatterns;
+                $scope = $data["compareScope"] ?? $this->compareScope;
 
-                self::debugLog("compare: src={$srcId} tgt={$tgtId} patterns={$patterns}");
+                self::debugLog(
+                    "compare: src={$srcId} tgt={$tgtId} patterns={$patterns}",
+                );
                 self::debugLog("compare: scope=" . json_encode($scope));
 
                 if (!$srcId || !$tgtId) {
-                    $wv->return($id, 1, json_encode(['error' => '请选择源库和目标库']));
+                    $wv->return(
+                        $id,
+                        1,
+                        json_encode(["error" => "请选择源库和目标库"]),
+                    );
                     return;
                 }
                 if ($srcId === $tgtId) {
-                    $wv->return($id, 1, json_encode(['error' => '源库和目标库不能相同']));
+                    $wv->return(
+                        $id,
+                        1,
+                        json_encode(["error" => "源库和目标库不能相同"]),
+                    );
                     return;
                 }
 
                 $src = $this->store->get($srcId);
                 $tgt = $this->store->get($tgtId);
                 if (!$src || !$tgt) {
-                    self::debugLog("compare: ERROR — 连接不存在 src=" . ($src ? 'ok' : 'null') . " tgt=" . ($tgt ? 'ok' : 'null'));
-                    $wv->return($id, 1, json_encode(['error' => '连接不存在']));
+                    self::debugLog(
+                        "compare: ERROR — 连接不存在 src=" .
+                            ($src ? "ok" : "null") .
+                            " tgt=" .
+                            ($tgt ? "ok" : "null"),
+                    );
+                    $wv->return($id, 1, json_encode(["error" => "连接不存在"]));
                     return;
                 }
 
-                self::debugLog("compare: src={$src->host}:{$src->port}/{$src->database}");
-                self::debugLog("compare: tgt={$tgt->host}:{$tgt->port}/{$tgt->database}");
+                self::debugLog(
+                    "compare: src={$src->host}:{$src->port}/{$src->database}",
+                );
+                self::debugLog(
+                    "compare: tgt={$tgt->host}:{$tgt->port}/{$tgt->database}",
+                );
 
                 // Parse exclude patterns
                 $pats = [];
-                if (is_string($patterns) && trim($patterns) !== '') {
-                    $pats = array_map('trim', explode(',', $patterns));
+                if (is_string($patterns) && trim($patterns) !== "") {
+                    $pats = array_map("trim", explode(",", $patterns));
                 } elseif (is_array($patterns)) {
                     $pats = $patterns;
                 }
@@ -420,20 +520,20 @@ class WebViewUI
                 // Save settings
                 if (is_string($patterns)) {
                     $this->excludePatterns = $patterns;
-                    $this->store->setSetting('excludePatterns', $patterns);
+                    $this->store->setSetting("excludePatterns", $patterns);
                 }
                 $this->compareScope = $scope;
-                $this->store->setSetting('compareScope', $scope);
+                $this->store->setSetting("compareScope", $scope);
 
                 // Return immediately to unblock WebView2 event processing
-                $wv->return($id, 0, json_encode(['status' => 'started']));
+                $wv->return($id, 0, json_encode(["status" => "started"]));
                 self::debugLog("compare: 返回 started, 启动 step-by-step");
 
                 // Start step-by-step compare asynchronously
                 $this->lastSrcId = $srcId;
                 $this->lastTgtId = $tgtId;
-                $this->comparePhase = 'running';
-                $this->compareError = '';
+                $this->comparePhase = "running";
+                $this->compareError = "";
 
                 $runner = new AsyncCompareRunner();
                 $this->currentRunner = $runner;
@@ -445,20 +545,25 @@ class WebViewUI
                 $runner->setOnProgress(function (int $pct, string $msg): void {
                     self::debugLog("compare progress: {$pct}% {$msg}");
                 });
-                $runner->setOnComplete(function (?DiffResult $result, array $diffSql) use ($srcId, $tgtId): void {
+                $runner->setOnComplete(function (
+                    ?DiffResult $result,
+                    array $diffSql,
+                ) use ($srcId, $tgtId): void {
                     if ($result && !$result->error) {
-                        self::debugLog("compare done: " . count($diffSql) . " diff items");
+                        self::debugLog(
+                            "compare done: " . count($diffSql) . " diff items",
+                        );
                         $this->lastDiff = $result;
                         $this->lastDiffSql = $diffSql;
                         $this->adapter = $this->currentRunner?->getLastAdapter();
                         $this->lastSrcId = $srcId;
                         $this->lastTgtId = $tgtId;
-                        $this->comparePhase = 'done';
-                        $this->compareError = '';
+                        $this->comparePhase = "done";
+                        $this->compareError = "";
                     } else {
-                        $errMsg = $result?->error ?? '比对返回空结果';
+                        $errMsg = $result?->error ?? "比对返回空结果";
                         self::debugLog("compare ERROR: {$errMsg}");
-                        $this->comparePhase = 'error';
+                        $this->comparePhase = "error";
                         $this->compareError = $errMsg;
                     }
                     $this->currentRunner = null;
@@ -466,64 +571,90 @@ class WebViewUI
 
                 $runner->startStepByStep(new Loop(), $src, $tgt, $pats, $scope);
             } catch (\Throwable $e) {
-                self::debugLogException($e, 'compare');
-                $this->comparePhase = 'error';
+                self::debugLogException($e, "compare");
+                $this->comparePhase = "error";
                 $this->compareError = $e->getMessage();
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
         // ─── Poll Compare Result ──────────────────────────────────
 
-        $wv->bind('getCompareResult', function (string $id, string $req) use ($wv): void {
+        $wv->bind("getCompareResult", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
-                if ($this->comparePhase === 'done') {
+                if ($this->comparePhase === "done") {
                     $result = $this->lastDiff;
                     if ($result) {
                         $data = $this->diffResultToArray($result);
-                        $data['phase'] = 'done';
+                        $data["phase"] = "done";
                         $wv->return($id, 0, json_encode($data));
                     } else {
-                        $wv->return($id, 0, json_encode(['phase' => 'done', 'total' => 0, 'items' => []]));
+                        $wv->return(
+                            $id,
+                            0,
+                            json_encode([
+                                "phase" => "done",
+                                "total" => 0,
+                                "items" => [],
+                            ]),
+                        );
                     }
-                } elseif ($this->comparePhase === 'error') {
-                    $wv->return($id, 0, json_encode([
-                        'phase' => 'error',
-                        'error' => $this->compareError ?: '比对失败',
-                    ]));
+                } elseif ($this->comparePhase === "error") {
+                    $wv->return(
+                        $id,
+                        0,
+                        json_encode([
+                            "phase" => "error",
+                            "error" => $this->compareError ?: "比对失败",
+                        ]),
+                    );
                 } else {
-                    $wv->return($id, 0, json_encode(['phase' => $this->comparePhase]));
+                    $wv->return(
+                        $id,
+                        0,
+                        json_encode(["phase" => $this->comparePhase]),
+                    );
                 }
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
         // ─── Cancel Compare ──────────────────────────────────────────
 
-        $wv->bind('cancelCompare', function (string $id, string $req) use ($wv): void {
+        $wv->bind("cancelCompare", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 if ($this->currentRunner) {
                     $this->currentRunner->cancel();
                     self::debugLog("compare: 用户取消比对");
                 }
-                $this->comparePhase = 'idle';
+                $this->comparePhase = "idle";
                 $this->currentRunner = null;
-                $wv->return($id, 0, json_encode(['status' => 'cancelled']));
+                $wv->return($id, 0, json_encode(["status" => "cancelled"]));
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => $e->getMessage()]));
+                $wv->return($id, 1, json_encode(["error" => $e->getMessage()]));
             }
         });
 
         // ─── Generate SQL ──────────────────────────────────────────
 
-        $wv->bind('generateSql', function (string $id, string $req) use ($wv): void {
+        $wv->bind("generateSql", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $selected = is_array($params) ? ($params[0] ?? []) : [];
+                $selected = is_array($params) ? $params[0] ?? [] : [];
 
                 if (!$this->lastDiff) {
-                    $wv->return($id, 1, json_encode(['error' => '没有比对结果，请先执行比对']));
+                    $wv->return(
+                        $id,
+                        1,
+                        json_encode(["error" => "没有比对结果，请先执行比对"]),
+                    );
                     return;
                 }
 
@@ -532,96 +663,162 @@ class WebViewUI
                 $tgt = null;
 
                 foreach ($selected as $item) {
-                    $type = $item['type'] ?? '';
-                    $name = $item['name'] ?? '';
+                    $type = $item["type"] ?? "";
+                    $name = $item["name"] ?? "";
 
-                    if ($type === '新增表') {
+                    if ($type === "新增表") {
                         foreach ($this->lastDiff->newTables as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newTables[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newTables[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除表') {
+                    } elseif ($type === "删除表") {
                         foreach ($this->lastDiff->removedTables as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedTables[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedTables[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '变更表') {
+                    } elseif ($type === "变更表") {
                         foreach ($this->lastDiff->changedTables as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->changedTables[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->changedTables[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '新增索引') {
+                    } elseif ($type === "新增索引") {
                         foreach ($this->lastDiff->newIndexes as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newIndexes[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newIndexes[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除索引') {
+                    } elseif ($type === "删除索引") {
                         foreach ($this->lastDiff->removedIndexes as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedIndexes[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedIndexes[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '新增外键') {
+                    } elseif ($type === "新增外键") {
                         foreach ($this->lastDiff->newForeignKeys as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newForeignKeys[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newForeignKeys[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除外键') {
+                    } elseif ($type === "删除外键") {
                         foreach ($this->lastDiff->removedForeignKeys as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedForeignKeys[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedForeignKeys[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '新增触发器') {
+                    } elseif ($type === "新增触发器") {
                         foreach ($this->lastDiff->newTriggers as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newTriggers[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newTriggers[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除触发器') {
+                    } elseif ($type === "删除触发器") {
                         foreach ($this->lastDiff->removedTriggers as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedTriggers[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedTriggers[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '变更触发器') {
+                    } elseif ($type === "变更触发器") {
                         foreach ($this->lastDiff->changedTriggers as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->changedTriggers[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->changedTriggers[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '新增视图') {
+                    } elseif ($type === "新增视图") {
                         foreach ($this->lastDiff->newViews as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newViews[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newViews[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除视图') {
+                    } elseif ($type === "删除视图") {
                         foreach ($this->lastDiff->removedViews as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedViews[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedViews[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '变更视图') {
+                    } elseif ($type === "变更视图") {
                         foreach ($this->lastDiff->changedViews as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->changedViews[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->changedViews[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '新增存储过程') {
+                    } elseif ($type === "新增存储过程") {
                         foreach ($this->lastDiff->newProcedures as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newProcedures[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newProcedures[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除存储过程') {
+                    } elseif ($type === "删除存储过程") {
                         foreach ($this->lastDiff->removedProcedures as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedProcedures[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedProcedures[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '变更存储过程') {
+                    } elseif ($type === "变更存储过程") {
                         foreach ($this->lastDiff->changedProcedures as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->changedProcedures[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->changedProcedures[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '新增函数') {
+                    } elseif ($type === "新增函数") {
                         foreach ($this->lastDiff->newFunctions as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newFunctions[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newFunctions[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除函数') {
+                    } elseif ($type === "删除函数") {
                         foreach ($this->lastDiff->removedFunctions as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedFunctions[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedFunctions[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '变更函数') {
+                    } elseif ($type === "变更函数") {
                         foreach ($this->lastDiff->changedFunctions as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->changedFunctions[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->changedFunctions[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '新增事件') {
+                    } elseif ($type === "新增事件") {
                         foreach ($this->lastDiff->newEvents as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->newEvents[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->newEvents[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '删除事件') {
+                    } elseif ($type === "删除事件") {
                         foreach ($this->lastDiff->removedEvents as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->removedEvents[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->removedEvents[] = $t;
+                                break;
+                            }
                         }
-                    } elseif ($type === '变更事件') {
+                    } elseif ($type === "变更事件") {
                         foreach ($this->lastDiff->changedEvents as $t) {
-                            if (($t['name'] ?? '') === $name) { $filtered->changedEvents[] = $t; break; }
+                            if (($t["name"] ?? "") === $name) {
+                                $filtered->changedEvents[] = $t;
+                                break;
+                            }
                         }
                     }
                 }
@@ -631,59 +828,93 @@ class WebViewUI
                     $src = $this->adapter->getSource();
                     $tgt = $this->adapter->getTarget();
                 } else {
-                    $src = $this->lastSrcId ? $this->store->get($this->lastSrcId) : null;
-                    $tgt = $this->lastTgtId ? $this->store->get($this->lastTgtId) : null;
+                    $src = $this->lastSrcId
+                        ? $this->store->get($this->lastSrcId)
+                        : null;
+                    $tgt = $this->lastTgtId
+                        ? $this->store->get($this->lastTgtId)
+                        : null;
                 }
 
                 if (!$src || !$tgt) {
-                    $wv->return($id, 1, json_encode(['error' => '缺少源库/目标库信息']));
+                    $wv->return(
+                        $id,
+                        1,
+                        json_encode(["error" => "缺少源库/目标库信息"]),
+                    );
                     return;
                 }
 
-                $structuredDiffs = $this->adapter ? $this->adapter->getStructuredDiffs() : [];
-                $gen = new Generator($src, $tgt, $this->adapter, $this->lastDiffSql ?? [], $structuredDiffs);
+                $structuredDiffs = $this->adapter
+                    ? $this->adapter->getStructuredDiffs()
+                    : [];
+                $gen = new Generator(
+                    $src,
+                    $tgt,
+                    $this->adapter,
+                    $this->lastDiffSql ?? [],
+                    $structuredDiffs,
+                );
                 $sql = $gen->generate($filtered);
 
-                $wv->return($id, 0, json_encode(['sql' => $sql]));
+                $wv->return($id, 0, json_encode(["sql" => $sql]));
             } catch (\Throwable $e) {
-                $wv->return($id, 1, json_encode(['error' => '生成 SQL 失败: ' . $e->getMessage()]));
+                $wv->return(
+                    $id,
+                    1,
+                    json_encode([
+                        "error" => "生成 SQL 失败: " . $e->getMessage(),
+                    ]),
+                );
             }
         });
 
         // ─── Clipboard ─────────────────────────────────────────────
 
-        $wv->bind('copyToClipboard', function (string $id, string $req) use ($wv): void {
+        $wv->bind("copyToClipboard", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $params = json_decode($req, true);
-                $text = is_array($params) ? ($params[0] ?? '') : '';
+                $text = is_array($params) ? $params[0] ?? "" : "";
 
                 $ok = false;
-                if (DIRECTORY_SEPARATOR === '\\') {
-                    $tmp = tempnam(sys_get_temp_dir(), 'mss_');
+                if (DIRECTORY_SEPARATOR === "\\") {
+                    $tmp = tempnam(sys_get_temp_dir(), "mss_");
                     file_put_contents($tmp, $text);
                     shell_exec('clip < "' . $tmp . '"');
                     @unlink($tmp);
                     $ok = true;
-                } elseif (function_exists('shell_exec')) {
+                } elseif (function_exists("shell_exec")) {
                     $escaped = str_replace("'", "'\\''", $text);
                     shell_exec("echo '{$escaped}' | pbcopy");
                     $ok = true;
                 }
 
-                $wv->return($id, 0, json_encode(['ok' => $ok]));
+                $wv->return($id, 0, json_encode(["ok" => $ok]));
             } catch (\Throwable $e) {
-                $wv->return($id, 0, json_encode(['ok' => false, 'error' => $e->getMessage()]));
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode(["ok" => false, "error" => $e->getMessage()]),
+                );
             }
         });
 
         // ─── Stdout Capture ───────────────────────────────────────
 
-        $wv->bind('getStdout', function (string $id, string $req) use ($wv): void {
+        $wv->bind("getStdout", function (string $id, string $req) use (
+            $wv,
+        ): void {
             try {
                 $lines = self::getStdoutLines();
-                $wv->return($id, 0, json_encode(['lines' => $lines]));
+                $wv->return($id, 0, json_encode(["lines" => $lines]));
             } catch (\Throwable $e) {
-                $wv->return($id, 0, json_encode(['lines' => [], 'error' => $e->getMessage()]));
+                $wv->return(
+                    $id,
+                    0,
+                    json_encode(["lines" => [], "error" => $e->getMessage()]),
+                );
             }
         });
     }
@@ -695,62 +926,69 @@ class WebViewUI
     private function diffResultToArray(?DiffResult $result): array
     {
         if (!$result) {
-            return ['total' => 0, 'items' => []];
+            return ["total" => 0, "items" => []];
         }
 
         $items = [];
         $typeMap = [
-            'newTables'       => ['label' => '新增表',       'risk' => 'SAFE'],
-            'removedTables'   => ['label' => '删除表',       'risk' => 'HIGH'],
-            'changedTables'   => ['label' => '变更表',       'risk' => 'WARN'],
-            'newIndexes'      => ['label' => '新增索引',     'risk' => 'SAFE'],
-            'removedIndexes'  => ['label' => '删除索引',     'risk' => 'WARN'],
-            'newForeignKeys'  => ['label' => '新增外键',     'risk' => 'SAFE'],
-            'removedForeignKeys' => ['label' => '删除外键',  'risk' => 'WARN'],
-            'newTriggers'     => ['label' => '新增触发器',   'risk' => 'SAFE'],
-            'removedTriggers' => ['label' => '删除触发器',   'risk' => 'WARN'],
-            'changedTriggers' => ['label' => '变更触发器',   'risk' => 'WARN'],
-            'newViews'        => ['label' => '新增视图',     'risk' => 'SAFE'],
-            'removedViews'    => ['label' => '删除视图',     'risk' => 'HIGH'],
-            'changedViews'    => ['label' => '变更视图',     'risk' => 'WARN'],
-            'newProcedures'   => ['label' => '新增存储过程', 'risk' => 'SAFE'],
-            'removedProcedures' => ['label' => '删除存储过程','risk' => 'WARN'],
-            'changedProcedures'=> ['label' => '变更存储过程', 'risk' => 'WARN'],
-            'newFunctions'    => ['label' => '新增函数',     'risk' => 'SAFE'],
-            'removedFunctions'=> ['label' => '删除函数',     'risk' => 'WARN'],
-            'changedFunctions'=> ['label' => '变更函数',     'risk' => 'WARN'],
-            'newEvents'       => ['label' => '新增事件',     'risk' => 'SAFE'],
-            'removedEvents'   => ['label' => '删除事件',     'risk' => 'WARN'],
-            'changedEvents'   => ['label' => '变更事件',     'risk' => 'WARN'],
+            "newTables" => ["label" => "新增表", "risk" => "SAFE"],
+            "removedTables" => ["label" => "删除表", "risk" => "HIGH"],
+            "changedTables" => ["label" => "变更表", "risk" => "WARN"],
+            "newIndexes" => ["label" => "新增索引", "risk" => "SAFE"],
+            "removedIndexes" => ["label" => "删除索引", "risk" => "WARN"],
+            "newForeignKeys" => ["label" => "新增外键", "risk" => "SAFE"],
+            "removedForeignKeys" => ["label" => "删除外键", "risk" => "WARN"],
+            "newTriggers" => ["label" => "新增触发器", "risk" => "SAFE"],
+            "removedTriggers" => ["label" => "删除触发器", "risk" => "WARN"],
+            "changedTriggers" => ["label" => "变更触发器", "risk" => "WARN"],
+            "newViews" => ["label" => "新增视图", "risk" => "SAFE"],
+            "removedViews" => ["label" => "删除视图", "risk" => "HIGH"],
+            "changedViews" => ["label" => "变更视图", "risk" => "WARN"],
+            "newProcedures" => ["label" => "新增存储过程", "risk" => "SAFE"],
+            "removedProcedures" => [
+                "label" => "删除存储过程",
+                "risk" => "WARN",
+            ],
+            "changedProcedures" => [
+                "label" => "变更存储过程",
+                "risk" => "WARN",
+            ],
+            "newFunctions" => ["label" => "新增函数", "risk" => "SAFE"],
+            "removedFunctions" => ["label" => "删除函数", "risk" => "WARN"],
+            "changedFunctions" => ["label" => "变更函数", "risk" => "WARN"],
+            "newEvents" => ["label" => "新增事件", "risk" => "SAFE"],
+            "removedEvents" => ["label" => "删除事件", "risk" => "WARN"],
+            "changedEvents" => ["label" => "变更事件", "risk" => "WARN"],
         ];
 
         foreach ($typeMap as $prop => $info) {
             $entries = $result->$prop ?? [];
             foreach ($entries as $entry) {
-                $name = $entry['name'] ?? '';
-                $risk = $entry['risk'] ?? $info['risk'];
-                $detail = $entry['detail'] ?? '';
+                $name = $entry["name"] ?? "";
+                $risk = $entry["risk"] ?? $info["risk"];
+                $detail = $entry["detail"] ?? "";
                 $items[] = [
-                    'type'    => $info['label'],
-                    'name'    => $name,
-                    'risk'    => $risk,
-                    'detail'  => $detail,
-                    'checked' => true,
+                    "type" => $info["label"],
+                    "name" => $name,
+                    "risk" => $risk,
+                    "detail" => $detail,
+                    "checked" => true,
                 ];
             }
         }
 
         // Sort: HIGH first, then WARN, then SAFE
-        $riskOrder = ['HIGH' => 0, 'WARN' => 1, 'SAFE' => 2];
+        $riskOrder = ["HIGH" => 0, "WARN" => 1, "SAFE" => 2];
         usort($items, function (array $a, array $b) use ($riskOrder) {
-            return ($riskOrder[$a['risk']] ?? 9) - ($riskOrder[$b['risk']] ?? 9);
+            return ($riskOrder[$a["risk"]] ?? 9) -
+                ($riskOrder[$b["risk"]] ?? 9);
         });
 
         return [
-            'total' => count($items),
-            'srcName' => $result->srcName ?? '',
-            'tgtName' => $result->tgtName ?? '',
-            'items'  => $items,
+            "total" => count($items),
+            "srcName" => $result->srcName ?? "",
+            "tgtName" => $result->tgtName ?? "",
+            "items" => $items,
         ];
     }
 
@@ -760,21 +998,28 @@ class WebViewUI
 
     private function getAppHtml(): string
     {
-        $assetDir = __DIR__ . '/assets';
+        $assetDir = __DIR__ . "/assets";
 
-        $html = file_get_contents($assetDir . '/app.html');
-        $css  = file_get_contents($assetDir . '/app.css');
-        $initJs = file_get_contents($assetDir . '/init.js');
-        $appJs  = file_get_contents($assetDir . '/app.js');
+        $html = file_get_contents($assetDir . "/app.html");
+        $css = file_get_contents($assetDir . "/app.css");
+        $initJs = file_get_contents($assetDir . "/init.js");
+        $appJs = file_get_contents($assetDir . "/app.js");
 
-        if ($html === false || $css === false || $initJs === false || $appJs === false) {
-            throw new \RuntimeException('Failed to load WebView assets from ' . $assetDir);
+        if (
+            $html === false ||
+            $css === false ||
+            $initJs === false ||
+            $appJs === false
+        ) {
+            throw new \RuntimeException(
+                "Failed to load WebView assets from " . $assetDir,
+            );
         }
 
         return str_replace(
-            ['{{CSS}}', '{{INIT_JS}}', '{{APP_JS}}'],
+            ["{{CSS}}", "{{INIT_JS}}", "{{APP_JS}}"],
             [$css, $initJs, $appJs],
-            $html
+            $html,
         );
     }
 
